@@ -12,3 +12,4 @@ rm -f configure
 rm -f src/Makefile.in
 rm -f autoscan*.log
 rm -f configure.scan
+rm -f 'config.h.in~'
