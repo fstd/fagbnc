@@ -15,7 +15,8 @@
 #include <libsrsirc/irc_con.h>
 #include <libsrsirc/irc_io.h>
 #include <libsrsirc/irc_util.h>
-#include <log.h>
+
+#include <libsrsbsns/log.h>
 
 
 static int g_verb = LOGLVL_ERR;
