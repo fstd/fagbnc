@@ -1,7 +1,8 @@
 #ifndef SRS_COMMON_H
 #define SRS_COMMON_H 1
 
-//#include <sys/types.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <sys/time.h>
 #include <stdbool.h>
 

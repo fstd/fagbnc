@@ -37,6 +37,7 @@ bool
 //#define _BSD_SOURCE 1
 
 //#include <stdio.h> //included in header
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 //#include <stdarg.h> //included in header

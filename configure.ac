@@ -17,7 +17,7 @@ AM_PROG_CC_C_O
 AC_PROG_CC_C99
 AC_PROG_MAKE_SET
 
-AC_CHECK_HEADERS([sys/time.h])
+AC_CHECK_HEADERS([stddef.h sys/time.h])
 AC_CHECK_LIB([srsirc], [ircbas_init], [], [AC_MSG_ERROR([libsrsirc not installed?])])
 
 # Checks for typedefs, structures, and compiler characteristics.
@@ -26,8 +26,6 @@ AC_TYPE_INT64_T
 AC_TYPE_SIZE_T
 
 # Checks for library functions.
-AC_FUNC_MALLOC
-AC_FUNC_REALLOC
 AC_FUNC_STRERROR_R
 AC_CHECK_FUNCS([gettimeofday memset pthread_self strdup time])
 
