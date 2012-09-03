@@ -1,10 +1,12 @@
 This is fagbnc. Is a pretty cool guy; doesnt afraid of disconnect.
 
+Dependencies: libsrsbsns, libsrsirc
+
 Quickstart:
 run ./autogen.sh to setup the autohell
 afterwards, usual ./configure ; make ; make install stuff applies
 configure will need CFLAGS and CXXFLAGS to contain "-I/usr/local ", and
-  LDFLAGS to contain "-L/usr/local/lib ", provided libsrsirc was installed
-  to /usr/local.
+  LDFLAGS to contain "-L/usr/local/lib ", provided libsrsirc and libsrsbsns
+  were installed to /usr/local.
 
 See INSTALL for generic autohell compile/install instructions.
