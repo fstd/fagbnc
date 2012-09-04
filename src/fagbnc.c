@@ -16,10 +16,10 @@
 #include <libsrsirc/irc_io.h>
 #include <libsrsirc/irc_util.h>
 
-#include <libsrsbsns/log.h>
+#include <libsrslog/log.h>
 
 
-static int g_verb = LOGLVL_ERR;
+static int g_verb = LOGLVL_WARN;
 static bool g_fancy = false;
 
 
@@ -59,8 +59,6 @@ process_args(int *argc, char ***argv)
 static void
 init(int *argc, char ***argv)
 {
-	LOG_INITX("fagbnc", LOGLVL_ERR, stderr, false);
-	ircbas_dispose(ircbas_init());//init dem loggers
 	log_reinit();
 
 	process_args(argc, argv);
@@ -70,14 +68,14 @@ init(int *argc, char ***argv)
 static void
 log_reinit(void)
 {
-	LOG_COLORS(g_fancy);
-	LOG_LEVEL(g_verb);
-	ircbas_log_set_fancy(g_fancy);
-	irccon_log_set_fancy(g_fancy);
-	ircio_log_set_fancy(g_fancy);
-	ircbas_log_set_loglvl(g_verb);
-	irccon_log_set_loglvl(g_verb);
-	ircio_log_set_loglvl(g_verb);
+	log_set_deflevel(g_verb);
+	log_set_deffancy(g_fancy);
+	int n = log_count_mods();
+	for(int i = 0; i < n; i++) {
+		log_set_level(log_get_mod(i), g_verb);
+		log_set_fancy(log_get_mod(i), g_fancy);
+		fprintf(stderr, "mod %d is %s\n", i, log_get_mod(i));
+	}
 }
 
 
@@ -104,6 +102,8 @@ int
 main(int argc, char **argv)
 {
 	init(&argc, &argv);
+	
+	ircbas_init();
 
 	return EXIT_SUCCESS;
 }

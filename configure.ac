@@ -18,7 +18,8 @@ AC_PROG_CC_C99
 AC_PROG_MAKE_SET
 
 AC_CHECK_HEADERS([stddef.h sys/time.h])
-AC_CHECK_LIB([srsbsns], [addr_log_init], [], [AC_MSG_ERROR([libsrsbsns not installed?])])
+AC_CHECK_LIB([srsbsns], [ringbuf_init], [], [AC_MSG_ERROR([libsrsbsns not installed?])])
+AC_CHECK_LIB([srslog], [log_is_fancy], [], [AC_MSG_ERROR([libsrslog not installed?])])
 AC_CHECK_LIB([srsirc], [ircbas_init], [], [AC_MSG_ERROR([libsrsirc not installed?])])
 
 # Checks for typedefs, structures, and compiler characteristics.
