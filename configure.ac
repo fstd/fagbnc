@@ -15,6 +15,7 @@ LT_INIT
 # Checks for programs.
 AM_PROG_CC_C_O
 AC_PROG_CC_C99
+AC_PROG_CXX
 AC_PROG_MAKE_SET
 
 AC_CHECK_HEADERS([stddef.h sys/time.h])
