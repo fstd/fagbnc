@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <unistd.h>
 
@@ -17,10 +18,21 @@
 #include <libsrsirc/irc_util.h>
 
 #include <libsrslog/log.h>
+#include <libsrsbsns/addr.h>
 
+#define STRTOUS(STR) ((unsigned short)strtol((STR), NULL, 10))
+#define DEF_LISTENPORT ((unsigned short)7778)
+#define DEF_LISTENIF "0.0.0.0"
 
 static int g_verb = LOGLVL_WARN;
 static bool g_fancy = false;
+
+static char g_listenif[256];
+static char g_trgsrv[256];
+static unsigned short g_listenport = DEF_LISTENPORT;
+
+static int g_sck;
+static ibhnd_t g_irc;
 
 
 static void process_args(int *argc, char ***argv);
@@ -34,8 +46,17 @@ process_args(int *argc, char ***argv)
 {
 	char *a0 = (*argv)[0];
 
-	for(int ch; (ch = getopt(*argc, *argv, "vch")) != -1;) {
+	for(int ch; (ch = getopt(*argc, *argv, "vchi:p:s:")) != -1;) {
 		switch (ch) {
+		case 'i':
+			strNcpy(g_listenif, optarg, sizeof g_listenif);
+			break;
+		case 'p':
+			g_listenport = STRTOUS(optarg);
+			break;
+		case 's':
+			strNcpy(g_trgsrv, optarg, sizeof g_trgsrv);
+			break;
 		case 'c':
 			g_fancy = true;
 			log_reinit();
@@ -61,7 +82,28 @@ init(int *argc, char ***argv)
 {
 	log_reinit();
 
+	strNcpy(g_listenif, DEF_LISTENIF, sizeof g_listenif);
+	
 	process_args(argc, argv);
+
+	if (strlen(g_trgsrv) == 0)
+		E("no server given (need -s)");
+
+	char host[256];
+	unsigned short port;
+	parse_hostspec(host, sizeof host, &port, g_trgsrv);
+
+	g_irc = ircbas_init();
+	ircbas_set_server(g_irc, host, port);
+
+	g_sck = addr_bind_socket(g_listenif, g_listenport);
+	if (g_sck == -1)
+		EE("couldn't bind to '%s:%hu'", g_listenif, g_listenport);
+
+	D("bound socket to '%s:%hu'", g_listenif, g_listenport);
+
+	if (listen(g_sck, 128) != 0)
+		EE("failed to listen()");
 }
 
 
@@ -74,7 +116,6 @@ log_reinit(void)
 	for(int i = 0; i < n; i++) {
 		log_set_level(log_get_mod(i), g_verb);
 		log_set_fancy(log_get_mod(i), g_fancy);
-		fprintf(stderr, "mod %d is %s\n", i, log_get_mod(i));
 	}
 }
 
@@ -102,8 +143,11 @@ int
 main(int argc, char **argv)
 {
 	init(&argc, &argv);
-	
-	ircbas_init();
+	D("initialized");
 
+
+	close(g_sck);
+	ircbas_dispose(g_irc);
+	
 	return EXIT_SUCCESS;
 }
