@@ -54,6 +54,11 @@ typedef std::map<std::string, bool, istringcmp> syncmap_t;
 static basemap_t *s_base;
 static syncmap_t *s_syncmap;
 
+static basemap_t *s_primbase;
+static syncmap_t *s_primsyncmap;
+
+static basemap_t *s_secbase;
+static syncmap_t *s_secsyncmap;
 
 extern "C" size_t
 ucb_count_chans()
@@ -215,6 +220,25 @@ ucb_has_user(const char *chan, const char *user)
 	             && (*s_base)[std::string(chan)].count(std::string(user));
 }
 
+extern "C" bool
+ucb_get_user(char *dest, size_t destsz, const char *chan, const char *user)
+{
+	if (!s_base->count(std::string(chan))) {
+		W("no such chan: '%s'", chan);
+		return false;
+	}
+	userset_t &uset = (*s_base)[std::string(chan)];
+	if (!uset.count(std::string(user))) {
+		W("no such user '%s' in chan '%s'", user, chan);
+		return false;
+	}
+
+	userset_t::iterator it = uset.find(std::string(user));
+	strncpy(dest, it->c_str(), destsz);
+	dest[destsz-1] = '\0';
+	return true;
+}
+
 extern "C" void
 ucb_dump()
 {
@@ -236,6 +260,20 @@ ucb_init(int casemap, const char *modepfx)
 	usercmp::casemap = casemap;
 	usercmp::modepfx = strdup(modepfx);
 	D("ucb initialized with casemap: %d, modepfx: '%s'", casemap, modepfx);
-	s_base = new basemap_t;
-	s_syncmap = new syncmap_t;
+	s_primbase = s_base = new basemap_t;
+	s_primsyncmap = s_syncmap = new syncmap_t;
+	s_secbase = new basemap_t;
+	s_secsyncmap = new syncmap_t;
+}
+
+extern "C" void
+ucb_switch_base(bool primary)
+{
+	if (primary) {
+		s_base = s_primbase;
+		s_syncmap = s_primsyncmap;
+	} else {
+		s_base = s_secbase;
+		s_syncmap = s_secsyncmap;
+	}
 }

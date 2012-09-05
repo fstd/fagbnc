@@ -28,9 +28,11 @@ void ucb_add_user(const char *chan, const char *user);
 void ucb_drop_user(const char *chan, const char *user);
 void ucb_drop_user_all(const char *user);
 bool ucb_has_user(const char *chan, const char *user);
+bool ucb_get_user(char *dest, size_t destsz, const char *chan, const char *user);
 void ucb_rename_user(const char *oldname, const char *newname);
 
 void ucb_init(int casemap, const char *modepfx);
+void ucb_switch_base(bool primary);
 
 void ucb_dump();
 
