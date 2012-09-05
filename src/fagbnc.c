@@ -27,6 +27,7 @@
 #define DEF_LISTENPORT ((unsigned short)7778)
 #define DEF_LISTENIF "0.0.0.0"
 #define MAX_IRCARGS 16
+#define MAX_NICKLEN 15
 
 static int g_verb = LOGLVL_WARN;
 static bool g_fancy = false;
@@ -49,6 +50,11 @@ static void joinmsg(char *dest, size_t destsz, const char *const *msg);
 static void disconnected(void);
 static void handle_ircmsg(char **msg, size_t nelem);
 static void handle_353(const char *chan, const char *users);
+static void handle_chanmode(const char *nick, const char *chan, const char *const *modes);
+static bool is_modepfx_chr(char c);
+static bool is_modepfx_sym(char c);
+static bool is_weaker_modepfx_sym(char c1, char c2);
+static char translate_modepfx(char c);
 
 
 static void
@@ -145,6 +151,10 @@ handle_ircmsg(char **msg, size_t nelem)
 		} else {
 			ucb_drop_user(msg[2], msg[3]);
 		}
+	} else if (strcmp(msg[1], "MODE") == 0) {
+		if (msg[2][0] == '#') { //XXX fix when adding support for 005 CHANTYPES
+			handle_chanmode(nick, msg[2], (const char *const *)msg + 3);
+		}
 	} else if (strcmp(msg[1], "353") == 0) { //RPL_NAMES
 		if (ucb_is_chan_sync(msg[4])) {
 			ucb_clear_chan(msg[4]);
@@ -158,6 +168,85 @@ handle_ircmsg(char **msg, size_t nelem)
 	}
 }
 
+static void
+handle_chanmode(const char *nick, const char *chan, const char *const *modes)
+{
+	size_t modecnt = 0;
+	while(modecnt < (MAX_IRCARGS-3) && modes[modecnt])
+		modecnt++;
+	size_t num;
+	char **p = parse_chanmodes(modes, modecnt, &num, ircbas_005modepfx(g_irc)[0],
+			ircbas_005chanmodes(g_irc));
+	for(size_t i = 0; i < num; i++) {
+		bool enable = p[i][0] == '+';
+		char mde = p[i][1];
+		if (is_modepfx_chr(mde)) {
+			mde = translate_modepfx(mde);
+			char *bname = p[i] + 3;
+			char buf[MAX_NICKLEN+2];
+			if (!ucb_get_user(buf, sizeof buf, chan, bname)) {
+				W("unknown user: '%s'", bname);
+				continue;
+			}
+
+			if (is_modepfx_sym(buf[0])) {
+				if (is_weaker_modepfx_sym(mde, buf[0])) {
+					D("weaker mode set, ignoring");
+					continue;
+				}
+
+				if (enable) {
+					buf[0] = mde;
+					ucb_rename_user(bname, buf);
+				} else {
+					ucb_rename_user(bname, bname);
+				}
+			} else {
+				if (enable) {
+					snprintf(buf, sizeof buf, "%c%s", mde, bname);
+					ucb_rename_user(bname, buf);
+				}
+			}
+		}
+	}
+	for(size_t i = 0; i < num; i++)
+		free(p[i]);
+	free(p);
+	
+}
+
+static bool
+is_modepfx_chr(char c)
+{
+	return strchr(ircbas_005modepfx(g_irc)[0], c);
+}
+
+static bool
+is_modepfx_sym(char c)
+{
+	return strchr(ircbas_005modepfx(g_irc)[1], c);
+}
+
+static bool
+is_weaker_modepfx_sym(char c1, char c2)
+{
+	return strchr(ircbas_005modepfx(g_irc)[1], c1) > strchr(ircbas_005modepfx(g_irc)[1], c2);
+}
+
+static char
+translate_modepfx(char c)
+{
+	if (is_modepfx_chr(c)) {
+		size_t off = (size_t)(strchr(ircbas_005modepfx(g_irc)[0], c) - ircbas_005modepfx(g_irc)[0]);
+		return ircbas_005modepfx(g_irc)[1][off];
+	}
+	if (is_modepfx_sym(c)) {
+		size_t off = (size_t)(strchr(ircbas_005modepfx(g_irc)[1], c) - ircbas_005modepfx(g_irc)[1]);
+		return ircbas_005modepfx(g_irc)[0][off];
+	}
+	W("unknown modepfx '%c'", c);
+	return 0;
+}
 
 static void
 handle_353(const char *chan, const char *users)
@@ -168,7 +257,7 @@ handle_353(const char *chan, const char *users)
 	do {
 		ucb_add_user(chan, tok);
 	} while ((tok = strtok(NULL, " ")));
-	free(users);
+	free(ubuf);
 }
 
 static void
