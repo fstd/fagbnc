@@ -33,7 +33,9 @@ int istringcmp::casemap = 0;
 
 typedef std::set<std::string, istringcmp> userset_t;
 typedef std::map<std::string, userset_t, istringcmp> basemap_t;
+typedef std::map<std::string, bool, istringcmp> syncmap_t;
 static basemap_t *s_base;
+static syncmap_t *s_syncmap;
 
 
 extern "C" size_t
@@ -91,6 +93,8 @@ ucb_add_chan(const char *chan)
 		(*s_base)[std::string(chan)] = userset_t();
 	else
 		W("chan already known: '%s'", chan);
+	
+	ucb_set_chan_sync(chan, false);
 }
 
 extern "C" void
@@ -103,6 +107,7 @@ ucb_drop_chan(const char *chan)
 	userset_t &uset = (*s_base)[std::string(chan)];
 	uset.clear();
 	s_base->erase(std::string(chan));
+	s_syncmap->erase(std::string(chan));
 }
 
 extern "C" bool
@@ -110,6 +115,35 @@ ucb_has_chan(const char *chan)
 {
 	return s_base->count(std::string(chan));
 }
+
+extern "C" void
+ucb_set_chan_sync(const char *chan, bool synced)
+{
+	(*s_syncmap)[std::string(chan)] = synced;
+
+}
+
+extern "C" bool
+ucb_is_chan_sync(const char *chan)
+{
+	if (!s_syncmap->count(std::string(chan))) {
+		W("no such chan: '%s'", chan);
+		return false;
+	}
+	return (*s_syncmap)[std::string(chan)];
+}
+
+extern "C" void
+ucb_rename_user(const char *oldname, const char *newname)
+{
+	for(basemap_t::iterator it = s_base->begin(); it != s_base->end(); it++) {
+		if (ucb_has_user(it->first.c_str(), oldname)) {
+			ucb_drop_user(it->first.c_str(), oldname);
+			ucb_add_user(it->first.c_str(), newname);
+		}
+	}
+}
+
 
 extern "C" void
 ucb_add_user(const char *chan, const char *user)
@@ -172,4 +206,5 @@ ucb_init(int casemap)
 {
 	istringcmp::casemap = casemap;
 	s_base = new basemap_t;
+	s_syncmap = new syncmap_t;
 }

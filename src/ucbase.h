@@ -20,11 +20,14 @@ const char *ucb_next_user(const char *chan, bool first);
 void ucb_add_chan(const char *chan);
 void ucb_drop_chan(const char *chan);
 bool ucb_has_chan(const char *chan);
+void ucb_set_chan_sync(const char *chan, bool synced);
+bool ucb_is_chan_sync(const char *chan);
 
 void ucb_add_user(const char *chan, const char *user);
 void ucb_drop_user(const char *chan, const char *user);
 void ucb_drop_user_all(const char *user);
 bool ucb_has_user(const char *chan, const char *user);
+void ucb_rename_user(const char *oldname, const char *newname);
 
 void ucb_init(int casemap);
 
