@@ -20,6 +20,8 @@
 #include <libsrslog/log.h>
 #include <libsrsbsns/addr.h>
 
+#include "ucbase.h"
+
 #define STRTOUS(STR) ((unsigned short)strtol((STR), NULL, 10))
 #define DEF_LISTENPORT ((unsigned short)7778)
 #define DEF_LISTENIF "0.0.0.0"
@@ -104,6 +106,8 @@ init(int *argc, char ***argv)
 
 	if (listen(g_sck, 128) != 0)
 		EE("failed to listen()");
+
+	ucb_init(CASEMAPPING_RFC1459);
 }
 
 
@@ -144,7 +148,6 @@ main(int argc, char **argv)
 {
 	init(&argc, &argv);
 	D("initialized");
-
 
 	close(g_sck);
 	ircbas_dispose(g_irc);

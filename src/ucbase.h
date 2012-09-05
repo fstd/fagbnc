@@ -26,7 +26,7 @@ void ucb_drop_user(const char *chan, const char *user);
 void ucb_drop_user_all(const char *user);
 bool ucb_has_user(const char *chan, const char *user);
 
-void ucb_set_casemap(int casemap);
+void ucb_init(int casemap);
 
 void ucb_dump();
 
