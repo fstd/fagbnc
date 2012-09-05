@@ -26,6 +26,7 @@
 #define STRTOUS(STR) ((unsigned short)strtol((STR), NULL, 10))
 #define DEF_LISTENPORT ((unsigned short)7778)
 #define DEF_LISTENIF "0.0.0.0"
+#define MAX_IRCARGS 16
 
 static int g_verb = LOGLVL_WARN;
 static bool g_fancy = false;
@@ -37,14 +38,17 @@ static unsigned short g_listenport = DEF_LISTENPORT;
 static int g_sck;
 static int g_clt;
 static ibhnd_t g_irc;
+static bool g_ucbinit = false;
 
 
 static void process_args(int *argc, char ***argv);
 static void init(int *argc, char ***argv);
 static void log_reinit(void);
 static void usage(FILE *str, const char *a0, int ec);
-static void joinmsg(char *dest, size_t destsz, char **msg);
+static void joinmsg(char *dest, size_t destsz, const char *const *msg);
 static void disconnected(void);
+static void handle_ircmsg(char **msg, size_t nelem);
+static void handle_353(const char *chan, const char *users);
 
 
 static void
@@ -54,17 +58,20 @@ life(void)
 		if (!ircbas_online(g_irc))
 			disconnected();
 
-		char *tok[16];
+		char *tok[MAX_IRCARGS];
 		int r = ircbas_read(g_irc, tok, 16, 10000);
 
 		if (r == -1)
 			continue;
 
 		if (r == 1) {
+			dumpmsg(0, tok, MAX_IRCARGS);
 			char buf[1024];
-			joinmsg(buf, sizeof buf, tok);
+			joinmsg(buf, sizeof buf, (const char* const*)tok);
 
 			io_fprintf(g_clt, "%s\r\n", buf);
+
+			handle_ircmsg(tok, MAX_IRCARGS);
 		}
 
 		fd_set fds;
@@ -78,12 +85,91 @@ life(void)
 
 		if (r == 1) {
 			char buf[1024];
-			io_read_line(g_clt, buf, sizeof buf);
-			ircbas_write(g_irc, buf);
+			r = io_read_line(g_clt, buf, sizeof buf);
+			if (r == -1)
+				EE("io_read_line failed");
+
+			char *end = buf + strlen(buf) - 1;
+			while (end >= buf && (*end == '\r' || *end == '\n' || *end == ' '))
+				*end-- = '\0';
+
+			if (strlen(buf) > 0)
+				ircbas_write(g_irc, buf);
 		}
 	}
 }
 
+
+static void
+handle_ircmsg(char **msg, size_t nelem)
+{
+	static bool s_got005casemap, s_got005prefix;
+	char nick[64];
+	pfx_extract_nick(nick, sizeof nick, msg[0]);
+	if (strcmp(msg[1], "005") == 0) {
+		if (!g_ucbinit) {
+			for(size_t i = 3; i < nelem; i++) {
+				if (!msg[i])
+					break;
+				if (strstr(msg[i], "CASEMAP"))
+					s_got005casemap = true;
+				if (strstr(msg[i], "PREFIX"))
+					s_got005prefix = true;
+			}
+			if (s_got005casemap && s_got005prefix) {
+				ucb_init(ircbas_casemap(g_irc), ircbas_005modepfx(g_irc)[1]);
+				g_ucbinit = true;
+			}
+		}
+	} else if (strcmp(msg[1], "JOIN") == 0) {
+		if (istrcasecmp(ircbas_mynick(g_irc), nick, ircbas_casemap(g_irc)) == 0) {
+			ucb_add_chan(msg[2]);
+		} else {
+			ucb_add_user(msg[2], nick);
+		}
+	} else if (strcmp(msg[1], "PART") == 0) {
+		if (istrcasecmp(ircbas_mynick(g_irc), nick, ircbas_casemap(g_irc)) == 0) {
+			ucb_drop_chan(msg[2]);
+		} else {
+			ucb_drop_user(msg[2], nick);
+		}
+	} else if (strcmp(msg[1], "QUIT") == 0) {
+		ucb_drop_user_all(nick);
+	} else if (strcmp(msg[1], "NICK") == 0) {
+		if (istrcasecmp(ircbas_mynick(g_irc), msg[2], ircbas_casemap(g_irc)) != 0) {
+			ucb_rename_user(nick, msg[2]);
+		}
+	} else if (strcmp(msg[1], "KICK") == 0) {
+		if (istrcasecmp(ircbas_mynick(g_irc), msg[3], ircbas_casemap(g_irc)) == 0) {
+			ucb_drop_chan(msg[2]);
+		} else {
+			ucb_drop_user(msg[2], msg[3]);
+		}
+	} else if (strcmp(msg[1], "353") == 0) { //RPL_NAMES
+		if (ucb_is_chan_sync(msg[4])) {
+			ucb_clear_chan(msg[4]);
+			ucb_set_chan_sync(msg[4], false);
+		}
+		handle_353(msg[4], msg[5]);
+	} else if (strcmp(msg[1], "366") == 0) { //RPL_ENDOFNAMES
+		ucb_set_chan_sync(msg[2], true);
+	} else if (strcmp(msg[1], "PRIVMSG") == 0 && strstr(msg[3], "dump")) {
+		ucb_dump();
+	}
+}
+
+
+static void
+handle_353(const char *chan, const char *users)
+{
+	char *ubuf = strdup(users);
+	char *tok = strtok(ubuf, " ");
+
+	do {
+		ucb_add_user(chan, tok);
+	} while ((tok = strtok(NULL, " ")));
+	free(users);
+}
 
 static void
 disconnected(void)
@@ -241,10 +327,10 @@ main(int argc, char **argv)
 		E("failed to connect/logon to IRC");
 	}
 
+	const char * const* const* lc = ircbas_logonconv(g_irc);
 	for(int i = 0; i < 4; i++) {
-		char **lc = ircbas_logonconv(g_irc, i);
 		char buf[1024];
-		joinmsg(buf, sizeof buf, lc);
+		joinmsg(buf, sizeof buf, lc[i]);
 
 		io_fprintf(g_clt, "%s\r\n", buf);
 	}
@@ -259,7 +345,7 @@ main(int argc, char **argv)
 
 
 static void
-joinmsg(char *dest, size_t destsz, char **msg)
+joinmsg(char *dest, size_t destsz, const char *const *msg)
 {
 	snprintf(dest, destsz, ":%s %s", msg[0], msg[1]);
 
