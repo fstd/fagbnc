@@ -117,6 +117,17 @@ ucb_has_chan(const char *chan)
 }
 
 extern "C" void
+ucb_clear_chan(const char *chan)
+{
+	if (!s_base->count(std::string(chan))) {
+		W("no such chan: '%s'", chan);
+		return;
+	}
+	userset_t &uset = (*s_base)[std::string(chan)];
+	uset.clear();
+}
+
+extern "C" void
 ucb_set_chan_sync(const char *chan, bool synced)
 {
 	(*s_syncmap)[std::string(chan)] = synced;

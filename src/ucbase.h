@@ -20,6 +20,7 @@ const char *ucb_next_user(const char *chan, bool first);
 void ucb_add_chan(const char *chan);
 void ucb_drop_chan(const char *chan);
 bool ucb_has_chan(const char *chan);
+void ucb_clear_chan(const char *chan);
 void ucb_set_chan_sync(const char *chan, bool synced);
 bool ucb_is_chan_sync(const char *chan);
 
