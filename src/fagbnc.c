@@ -19,6 +19,7 @@
 
 #include <libsrslog/log.h>
 #include <libsrsbsns/addr.h>
+#include <libsrsbsns/io.h>
 
 #include "ucbase.h"
 
@@ -34,6 +35,7 @@ static char g_trgsrv[256];
 static unsigned short g_listenport = DEF_LISTENPORT;
 
 static int g_sck;
+static int g_clt;
 static ibhnd_t g_irc;
 
 
@@ -41,6 +43,53 @@ static void process_args(int *argc, char ***argv);
 static void init(int *argc, char ***argv);
 static void log_reinit(void);
 static void usage(FILE *str, const char *a0, int ec);
+static void joinmsg(char *dest, size_t destsz, char **msg);
+static void disconnected(void);
+
+
+static void
+life(void)
+{
+	for(;;) {
+		if (!ircbas_online(g_irc))
+			disconnected();
+
+		char *tok[16];
+		int r = ircbas_read(g_irc, tok, 16, 10000);
+
+		if (r == -1)
+			continue;
+
+		if (r == 1) {
+			char buf[1024];
+			joinmsg(buf, sizeof buf, tok);
+
+			io_fprintf(g_clt, "%s\r\n", buf);
+		}
+
+		fd_set fds;
+		FD_ZERO(&fds);
+		FD_SET(g_clt, &fds);
+		struct timeval to = {0, 0};
+
+		r = select(g_clt+1, &fds, NULL, NULL, &to);
+		if (r == -1)
+			E("select() failed");
+
+		if (r == 1) {
+			char buf[1024];
+			io_read_line(g_clt, buf, sizeof buf);
+			ircbas_write(g_irc, buf);
+		}
+	}
+}
+
+
+static void
+disconnected(void)
+{
+	E("damn!");
+}
 
 
 static void
@@ -106,8 +155,6 @@ init(int *argc, char ***argv)
 
 	if (listen(g_sck, 128) != 0)
 		EE("failed to listen()");
-
-	ucb_init(CASEMAPPING_RFC1459);
 }
 
 
@@ -149,8 +196,79 @@ main(int argc, char **argv)
 	init(&argc, &argv);
 	D("initialized");
 
+	g_clt = accept(g_sck, NULL, NULL);
+
+	if (g_clt == -1)
+		EE("failed to accept()");
+
+	char buf[1024];
+	int r;
+	bool gotnick = false;
+	bool gotuser = false;
+	bool gotpass = false;
+	char *uname, *fname, *nick, *pass;
+	int conflags;
+	do {
+		r = io_read_line(g_clt, buf, sizeof buf);	
+		if (r == -1)
+			E("io_read_line failed");
+		if (strncmp(buf, "PASS", 4) == 0) {
+			gotpass = true;
+			char *tok = strtok(buf, " ");
+			pass = strdup(strtok(NULL, " "));
+		} else if (strncmp(buf, "NICK", 4) == 0) {
+			gotnick = true;
+			char *tok = strtok(buf, " ");
+			nick = strdup(strtok(NULL, " "));
+		} else if (strncmp(buf, "USER", 4) == 0) {
+			gotuser = true;
+			char *tok = strtok(buf, " ");
+			uname = strdup(strtok(NULL, " "));
+			conflags = (int)strtol(strtok(NULL, " "), NULL, 10);
+			strtok(NULL, " ");
+			fname = strdup(strtok(NULL, " ")+1);
+		}
+	} while (!gotnick || !gotuser);
+
+	ircbas_set_nick(g_irc, nick);
+	if (gotpass)
+		ircbas_set_pass(g_irc, pass);
+	ircbas_set_uname(g_irc, uname);
+	ircbas_set_fname(g_irc, fname);
+	ircbas_set_conflags(g_irc, conflags);
+
+	if (!ircbas_connect(g_irc, 30000000)) {
+		E("failed to connect/logon to IRC");
+	}
+
+	for(int i = 0; i < 4; i++) {
+		char **lc = ircbas_logonconv(g_irc, i);
+		char buf[1024];
+		joinmsg(buf, sizeof buf, lc);
+
+		io_fprintf(g_clt, "%s\r\n", buf);
+	}
+
+	life();
+
 	close(g_sck);
 	ircbas_dispose(g_irc);
 	
 	return EXIT_SUCCESS;
+}
+
+
+static void
+joinmsg(char *dest, size_t destsz, char **msg)
+{
+	snprintf(dest, destsz, ":%s %s", msg[0], msg[1]);
+
+	int j = 2;
+	while(msg[j]) {
+		strNcat(dest, " ", destsz);
+		if (!msg[j+1] && strchr(msg[j], ' '))
+			strNcat(dest, ":", destsz);
+		strNcat(dest, msg[j], destsz);
+		j++;
+	}
 }
