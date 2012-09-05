@@ -17,6 +17,21 @@ extern "C" {
 #include <libsrslog/log.h>
 }
 
+class usercmp
+{
+public:
+	static int casemap;
+	static char *modepfx;
+	bool operator()(std::string const& s1, std::string const& s2) const
+	{
+		std::string n1 = std::string(s1, strchr(modepfx, s1[0])?1:0, s1.length());
+		std::string n2 = std::string(s2, strchr(modepfx, s2[0])?1:0, s2.length());
+		int i = istrcasecmp(n1.c_str(), n2.c_str(), casemap);
+		D("comparing '%s' vs '%s': %d", s1.c_str(), s2.c_str(), i);
+		return i < 0;
+	}
+};
+
 class istringcmp
 {
 public:
@@ -30,8 +45,10 @@ public:
 };
 
 int istringcmp::casemap = 0;
+int usercmp::casemap = 0;
+char *usercmp::modepfx = NULL;
 
-typedef std::set<std::string, istringcmp> userset_t;
+typedef std::set<std::string, usercmp> userset_t;
 typedef std::map<std::string, userset_t, istringcmp> basemap_t;
 typedef std::map<std::string, bool, istringcmp> syncmap_t;
 static basemap_t *s_base;
@@ -213,9 +230,12 @@ ucb_dump()
 }
 
 extern "C" void
-ucb_init(int casemap)
+ucb_init(int casemap, const char *modepfx)
 {
 	istringcmp::casemap = casemap;
+	usercmp::casemap = casemap;
+	usercmp::modepfx = strdup(modepfx);
+	D("ucb initialized with casemap: %d, modepfx: '%s'", casemap, modepfx);
 	s_base = new basemap_t;
 	s_syncmap = new syncmap_t;
 }
