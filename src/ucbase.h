@@ -33,6 +33,8 @@ void ucb_rename_user(const char *oldname, const char *newname);
 
 void ucb_init(int casemap, const char *modepfx);
 void ucb_switch_base(bool primary);
+void ucb_store_key(const char *chan, const char *key);
+const char* ucb_retrieve_key(const char *chan);
 
 void ucb_dump();
 

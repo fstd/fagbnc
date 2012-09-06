@@ -48,9 +48,11 @@ int istringcmp::casemap = 0;
 int usercmp::casemap = 0;
 char *usercmp::modepfx = NULL;
 
+typedef std::map<std::string, std::string> keymap_t;
 typedef std::set<std::string, usercmp> userset_t;
 typedef std::map<std::string, userset_t, istringcmp> basemap_t;
 typedef std::map<std::string, bool, istringcmp> syncmap_t;
+
 static basemap_t *s_base;
 static syncmap_t *s_syncmap;
 
@@ -59,6 +61,8 @@ static syncmap_t *s_primsyncmap;
 
 static basemap_t *s_secbase;
 static syncmap_t *s_secsyncmap;
+
+static keymap_t s_keymap;
 
 extern "C" size_t
 ucb_count_chans()
@@ -276,4 +280,18 @@ ucb_switch_base(bool primary)
 		s_base = s_secbase;
 		s_syncmap = s_secsyncmap;
 	}
+}
+
+extern "C" void
+ucb_store_key(const char *chan, const char *key)
+{
+	s_keymap[std::string(chan)] = std::string(key);
+}
+
+extern "C" const char*
+ucb_retrieve_key(const char *chan)
+{
+	if (!s_keymap.count(std::string(chan)))
+		return NULL;
+	return s_keymap[std::string(chan)].c_str();
 }
