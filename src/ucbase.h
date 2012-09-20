@@ -28,11 +28,20 @@ void ucb_add_user(const char *chan, const char *user);
 void ucb_drop_user(const char *chan, const char *user);
 void ucb_drop_user_all(const char *user);
 bool ucb_has_user(const char *chan, const char *user);
-bool ucb_get_user(char *dest, size_t destsz, const char *chan, const char *user);
+bool ucb_get_user(char *dst, size_t dstsz, const char *ch, const char *us);
+void ucb_reprefix_user(const char *chan, const char *name, char c);
 void ucb_rename_user(const char *oldname, const char *newname);
 
-void ucb_init(int casemap, const char *modepfx);
+char* ucb_diff_chans();
+char* ucb_diff_users(const char *chan);
+void ucb_cleanup();
+void ucb_purge();
+
+void ucb_init();
+void ucb_set_modepfx(const char *modepfx);
+void ucb_set_casemap(int casemap);
 void ucb_switch_base(bool primary);
+void ucb_copy();
 void ucb_store_key(const char *chan, const char *key);
 const char* ucb_retrieve_key(const char *chan);
 
