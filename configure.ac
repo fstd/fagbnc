@@ -30,7 +30,7 @@ AC_TYPE_SIZE_T
 
 # Checks for library functions.
 AC_FUNC_STRERROR_R
-AC_CHECK_FUNCS([gettimeofday memset pthread_self strdup time])
+AC_CHECK_FUNCS([atexit gettimeofday memset pthread_self select strchr strdup strstr strtol time])
 
 AC_CONFIG_FILES([Makefile
                  common/Makefile
