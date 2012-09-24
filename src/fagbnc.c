@@ -70,6 +70,7 @@ static char g_sync_nick[MAX_NICKLEN+1];
 static char *g_needpong;
 static time_t g_last_num;
 static bool g_shutdown;
+static bool g_keep_trying;
 
 static void* g_irc_sendQ;
 static void* g_irc_logonQ;
@@ -135,7 +136,7 @@ life(void)
 
 				g_last_num = time(NULL);
 			} else {
-				if (fresh)
+				if (fresh && !g_keep_trying)
 					E("failed to connect");
 
 				N("sleeping 30 sec");
@@ -689,7 +690,7 @@ process_args(int *argc, char ***argv)
 {
 	char *a0 = (*argv)[0];
 
-	for(int ch; (ch = getopt(*argc, *argv, "vchi:p:s:")) != -1;) {
+	for(int ch; (ch = getopt(*argc, *argv, "vchi:p:s:k")) != -1;) {
 		switch (ch) {
 		case 'i':
 			strNcpy(g_listen_if, optarg, sizeof g_listen_if);
@@ -699,6 +700,9 @@ process_args(int *argc, char ***argv)
 			break;
 		case 's':
 			strNcpy(g_irc_srv, optarg, sizeof g_irc_srv);
+			break;
+		case 'k':
+			g_keep_trying = true;
 			break;
 		case 'c':
 			g_fancy = true;
