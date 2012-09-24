@@ -154,14 +154,14 @@ life(void)
 
 		if (g_grab_logon && g_last_num + LGRAB_TIME < time(NULL)) {
 			io_fprintf(g_clt_sck, ":-fagbnc!fag@bnc PRIVMSG %s "
-			               ":first sync complete", g_sync_nick);
+			           ":first sync complete\r\n", g_sync_nick);
 			g_grab_logon = false;
 		}
 
 		if (!g_synced && g_last_num + SYNC_DELAY < time(NULL)) {
 			resync();
 			io_fprintf(g_clt_sck, ":-fagbnc!fag@bnc PRIVMSG %s "
-			                            ":synced", g_sync_nick);
+			                        ":synced\r\n", g_sync_nick);
 		}
 
 
@@ -402,7 +402,8 @@ handle_clt_msg(const char *line)
 		char *dup = strdup(line);
 		char *tok = strtok(dup+5, " ");
 		if (!g_synced) {
-			io_fprintf(g_clt_sck, ":%1$s PONG %1$s :%1$s",tok);
+			io_fprintf(g_clt_sck, ":%1$s PONG %1$s :%1$s\r\n",
+			                                               tok);
 		} else {
 			free(g_needpong);
 			g_needpong = strdup(tok);
@@ -494,7 +495,7 @@ resync(void)
 		ucb_rename_user(g_sync_nick, ircbas_mynick(g_irc));
 		ucb_switch_base(false);
 
-		io_fprintf(g_clt_sck, ":%s!fix@me NICK %s", g_sync_nick,
+		io_fprintf(g_clt_sck, ":%s!fix@me NICK %s\r\n", g_sync_nick,
 		                                      ircbas_mynick(g_irc));
 
 		strNcpy(g_sync_nick, ircbas_mynick(g_irc),
@@ -509,10 +510,10 @@ resync(void)
 		tok++;
 
 		if (added) {
-			io_fprintf(g_clt_sck, ":%s!fix@me JOIN %s",
+			io_fprintf(g_clt_sck, ":%s!fix@me JOIN %s\r\n",
 			                         ircbas_mynick(g_irc), tok);
 		} else
-			io_fprintf(g_clt_sck, ":%s!fix@me PART %s :synthetical",
+			io_fprintf(g_clt_sck, ":%s!fix@me PART %s :syn\r\n",
 			                         ircbas_mynick(g_irc), tok);
 		tok = strtok(NULL, ",");
 	}
@@ -539,16 +540,19 @@ resync(void)
 					c = 0;
 
 				if (add) {
-					io_fprintf(g_clt_sck, ":%s!fix@me JOIN %s",
-					                         tok, chan);
+					io_fprintf(g_clt_sck, ":%s!fix@me "
+					                      "JOIN %s\r\n",
+					                      tok, chan);
 					if (c)
-						io_fprintf(g_clt_sck, ":fix.me MODE "
-						       "%s +%c %s", chan,
-						       translate_modepfx(c),
-						       tok);
+						io_fprintf(g_clt_sck,
+						      ":fix.me MODE "
+						      "%s +%c %s\r\n", chan,
+						      translate_modepfx(c),
+						      tok);
 				} else
-					io_fprintf(g_clt_sck, ":%s!fix@me PART %s "
-					               ":synth", tok, chan);
+					io_fprintf(g_clt_sck, ":%s!fix@me "
+					               "PART %s :synth\r\n",
+					               tok, chan);
 				break;
 			case '*':
 				{
@@ -557,13 +561,13 @@ resync(void)
 				char new = tok[1];
 				tok += 2;
 				if (old != ' ')
-					io_fprintf(g_clt_sck, ":fix.me MODE %s -%c "
-					             "%s", chan,
+					io_fprintf(g_clt_sck, ":fix.me MODE"
+					             " %s -%c %s\r\n", chan,
 					             translate_modepfx(old),
 					             tok);
 				if (new != ' ')
-					io_fprintf(g_clt_sck, ":fix.me MODE %s +%c "
-					             "%s", chan,
+					io_fprintf(g_clt_sck, ":fix.me MODE"
+					             " %s +%c %s\r\n", chan,
 					             translate_modepfx(new),
 					             tok);
 				}
@@ -602,10 +606,11 @@ static void
 on_disconnect(void)
 {
 	if (g_synced) {
-		io_fprintf(g_clt_sck, ":-fagbnc!fag@bnc PRIVMSG %s :desynced",
-		                                               g_sync_nick);
+		io_fprintf(g_clt_sck, ":-fagbnc!fag@bnc PRIVMSG %s "
+		                              ":desynced\r\n", g_sync_nick);
 		if (g_needpong) {
-			io_fprintf(g_clt_sck, ":%1$s PONG %1$s :%1$s", g_needpong);
+			io_fprintf(g_clt_sck, ":%1$s PONG %1$s :%1$s\r\n",
+			                                        g_needpong);
 			free(g_needpong);
 			g_needpong = NULL;
 		}
