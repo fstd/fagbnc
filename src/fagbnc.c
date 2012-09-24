@@ -36,6 +36,7 @@
 #define MAX_JOIN_AT_ONCE 10
 #define SYNC_DELAY 15
 #define LGRAB_TIME 20
+#define SHUTDOWN_TIME 20
 
 /* shadowing the irclib calls and g_irc, to keep things
  * readable */
@@ -68,6 +69,7 @@ static bool g_grab_logon = true;
 static char g_sync_nick[MAX_NICKLEN+1];
 static char *g_needpong;
 static time_t g_last_num;
+static bool g_shutdown;
 
 static void* g_irc_sendQ;
 static void* g_irc_logonQ;
@@ -115,6 +117,9 @@ life(void)
 
 	for(;;) {
 		if (!IONLINE()) {
+			if (g_shutdown)
+				break;
+
 			if (!fresh)
 				on_disconnect();
 
@@ -141,6 +146,11 @@ life(void)
 
 		process_irc();
 
+		if (g_shutdown && g_shutdown < time(NULL)) {
+			W("aborting life loop due to shutdown");
+			break;
+		}
+
 		if (g_grab_logon && g_last_num + LGRAB_TIME < time(NULL)) {
 			io_fprintf(g_clt_sck, ":-fagbnc!fag@bnc PRIVMSG %s "
 			               ":first sync complete", g_sync_nick);
@@ -152,6 +162,7 @@ life(void)
 			io_fprintf(g_clt_sck, ":-fagbnc!fag@bnc PRIVMSG %s "
 			                            ":synced", g_sync_nick);
 		}
+
 
 		char buf[1024];
 		int r = clt_read_line(buf, sizeof buf);
@@ -574,7 +585,12 @@ process_sendQ(void)
 {
 	if (g_synced) {
 		if (q_size(g_irc_sendQ) > 0) {
-			IWRITE(q_peek(g_irc_sendQ, true));
+			const char *msg = q_peek(g_irc_sendQ, true);
+			IWRITE(msg);
+			if (strncmp(msg, "QUIT", 4) == 0) {
+				N("relayed QUIT, shutting down");
+				g_shutdown = time(NULL) + SHUTDOWN_TIME;
+			}
 			q_pop(g_irc_sendQ, true);
 		}
 	}
@@ -837,8 +853,9 @@ main(int argc, char **argv)
 
 	life();
 
-	close(listen_sck);
 	IDISPOSE();
+	close(listen_sck);
+	close(g_clt_sck);
 
 	return EXIT_SUCCESS;
 }
