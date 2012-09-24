@@ -672,7 +672,8 @@ join_irc_msg(char *dest, size_t destsz, const char *const *msg)
 	int j = 2;
 	while(j < MAX_IRCARGS && msg[j]) {
 		strNcat(dest, " ", destsz);
-		if ((j+1 == MAX_IRCARGS || !msg[j+1]) && strchr(msg[j],' '))
+		//if ((j+1 == MAX_IRCARGS || !msg[j+1]) && strchr(msg[j],' '))
+		if ((j+1 == MAX_IRCARGS || !msg[j+1]))
 			strNcat(dest, ":", destsz);
 		strNcat(dest, msg[j], destsz);
 		j++;
