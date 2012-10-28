@@ -116,7 +116,7 @@ static bool dump_irc_msg_ex(char **msg, size_t msg_len, void *tag,
 
 static void process_args(int *argc, char ***argv);
 static int init(int *argc, char ***argv);
-static void setup_clt();
+static void setup_clt(void);
 static void cleanup(void);
 static void log_reinit(void);
 static void usage(FILE *str, const char *a0, int ec);
@@ -882,7 +882,7 @@ init(int *argc, char ***argv)
 
 
 static void
-setup_clt()
+setup_clt(void)
 {
 	D("%ssetting up client");
 
