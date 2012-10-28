@@ -181,7 +181,7 @@ ucb_reprefix_user(const char *chan, const char *name, char c)
 		nname[0] = c;
 		strNcpy(nname+1, name, nsz-1);
 
-		D("reprefixing user in '%s': '%s' to '%c'", chan, name, c);
+		//D("reprefixing user in '%s': '%s' to '%c'", chan, name, c);
 
 		ucb_drop_user(chan, name);
 		ucb_add_user(chan, c==' '?nname+1:nname);
@@ -197,7 +197,7 @@ ucb_rename_user(const char *name, const char *newname)
 	strNcpy(nname+1, newname, nsz-1);
 	size_t osz = strlen(name)+2;
 	char *oname = (char*)malloc(osz);//modepfx and \0
-	D("renaming user '%s' to '%s'", name, newname);
+	//D("renaming user '%s' to '%s'", name, newname);
 
 	for(basemap_t::iterator it = s_base->begin(); it != s_base->end();
 	                                                             it++) {
@@ -225,7 +225,7 @@ ucb_add_user(const char *chan, const char *user)
 		return;
 	}
 	(*s_base)[std::string(chan)].insert(std::string(user));
-	D("Adding user to chan '%s': '%s'", chan, user);
+	//D("Adding user to chan '%s': '%s'", chan, user);
 }
 
 extern "C" void
@@ -240,7 +240,7 @@ ucb_drop_user(const char *chan, const char *user)
 		W("no such user '%s' in chan '%s'", user, chan);
 		return;
 	}
-	D("Dropping user from chan '%s': '%s'", chan, user);
+	//D("Dropping user from chan '%s': '%s'", chan, user);
 	uset.erase(std::string(user));
 }
 
@@ -429,7 +429,7 @@ ucb_diff_chans()
 		end+= it->length();
 	}
 
-	N("chdiff is '%s'", chmd);
+	//N("chdiff is '%s'", chmd);
 	return chmd;
 }
 
@@ -525,7 +525,7 @@ ucb_diff_users(const char *chan)
 		end+= it->length();
 	}
 
-	N("udiff for '%s' is '%s'", chan, umd);
+	//N("udiff for '%s' is '%s'", chan, umd);
 	return umd;
 
 }

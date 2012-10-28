@@ -37,13 +37,14 @@
 #define SYNC_DELAY 15
 #define LGRAB_TIME 20
 #define SHUTDOWN_TIME 20
+#define SEND_DELAY 2
 
 /* shadowing the irclib calls and g_irc, to keep things
  * readable */
 #define IRESET() ircbas_reset(g_irc)
 #define IDISPOSE() ircbas_dispose(g_irc)
 #define ICONNECT(TOUT) ircbas_connect(g_irc, (TOUT)*1000000ul)
-#define IREAD(TOK,TOKLEN,TO_US) ircbas_read(g_irc,(TOK),(TOKLEN),(TO_US))
+#define IREAD(TOK,TOKLEN,CT,TO_US) ircbas_read(g_irc,(TOK),(TOKLEN),(CT),(TO_US))
 #define IWRITE(LINE) ircbas_write(g_irc, (LINE))
 #define IONLINE() ircbas_online(g_irc)
 #define ICASEMAP() ircbas_casemap(g_irc)
@@ -61,19 +62,26 @@ static unsigned short g_irc_port = DEF_LISTENPORT;
 
 static ibhnd_t g_irc;
 
+static int g_listen_sck;
 static int g_clt_sck;
 
 static bool g_synced = true;
 static bool g_grab_logon = true;
+static time_t g_last_clt_ping;
+static time_t g_next_con_try;
 
 static char g_sync_nick[MAX_NICKLEN+1];
 static char *g_needpong;
 static time_t g_last_num;
 static bool g_shutdown;
 static bool g_keep_trying;
+static int g_max_lag;
 
 static void* g_irc_sendQ;
 static void* g_irc_logonQ;
+static void* g_irc_confirmQ;
+static void* g_irc_missQ;
+static void* g_irc_outmissQ;
 
 
 
@@ -86,6 +94,7 @@ static void handle_irc_cmode(const char *chan, const char *const *modes);
 static int clt_read_line(char *dest, size_t destsz);
 static void handle_clt_msg(const char *line);
 
+static int clt_printf(const char *fmt, ...);
 static void send_logon_conv();
 static void replay_logon(void);
 static void resync(void);
@@ -99,11 +108,15 @@ static bool is_modepfx_sym(char c);
 static bool is_weaker_modepfx_sym(char c1, char c2);
 static char translate_modepfx(char c);
 
-static void join_irc_msg(char *dest, size_t destsz, const char *const *msg);
+static void join_irc_msg(char *dest, size_t destsz, const char *const *msg,
+                                                           bool colonTrail);
 static bool dump_irc_msg(char **msg, size_t msg_len, void *tag);
+static bool dump_irc_msg_ex(char **msg, size_t msg_len, void *tag,
+                                                          bool colonTrail);
 
 static void process_args(int *argc, char ***argv);
 static int init(int *argc, char ***argv);
+static void setup_clt(bool resetup);
 static void cleanup(void);
 static void log_reinit(void);
 static void usage(FILE *str, const char *a0, int ec);
@@ -115,65 +128,81 @@ static void
 life(void)
 {
 	bool fresh = true;
+	g_next_con_try = time(NULL);
 
 	for(;;) {
 		if (!IONLINE()) {
 			if (g_shutdown)
 				break;
 
-			if (!fresh)
+			if (!g_next_con_try && !fresh)
 				on_disconnect();
 
-			if (ICONNECT(30)) {
-				if (fresh) {
-					strNcpy(g_sync_nick,
-					               ircbas_mynick(g_irc),
-					               sizeof g_sync_nick);
-					fresh = false;
-					send_logon_conv();
-				} else
-					replay_logon();
+			if (g_next_con_try <= time(NULL)) {
+				if (ICONNECT(30)) {
+					if (fresh) {
+						strNcpy(g_sync_nick,
+						       ircbas_mynick(g_irc),
+						       sizeof g_sync_nick);
+						fresh = false;
+						send_logon_conv();
+					} else
+						replay_logon();
 
-				g_last_num = time(NULL);
-			} else {
-				if (fresh && !g_keep_trying)
-					E("failed to connect");
+					g_last_num = time(NULL);
+					g_next_con_try = 0;
+				} else {
+					if (fresh && !g_keep_trying)
+						E("failed to connect");
 
-				N("sleeping 30 sec");
-				sleep(30);
-				continue;
+					N("waiting 30 sec");
+					g_next_con_try = time(NULL) + 30;
+				}
 			}
 		}
 
-		process_irc();
+		if (IONLINE()) {
+
+			process_irc();
+
+			if (g_grab_logon && g_last_num + LGRAB_TIME < time(NULL)) {
+				clt_printf(":-fagbnc!fag@bnc PRIVMSG %s "
+					   ":first sync complete\r\n", g_sync_nick);
+				g_grab_logon = false;
+			}
+
+			if (!g_synced && g_last_num + SYNC_DELAY < time(NULL)) {
+				resync();
+				clt_printf(":-fagbnc!fag@bnc PRIVMSG %s "
+							":synced\r\n", g_sync_nick);
+			}
+
+			if (g_synced && g_max_lag && g_last_clt_ping &&
+					  time(NULL)-g_last_clt_ping > g_max_lag) {
+				W("too laggy, assuming d/c");
+				IRESET();
+				continue;
+			}
+		} else
+			usleep(20000);
 
 		if (g_shutdown && g_shutdown < time(NULL)) {
 			W("aborting life loop due to shutdown");
 			break;
 		}
 
-		if (g_grab_logon && g_last_num + LGRAB_TIME < time(NULL)) {
-			io_fprintf(g_clt_sck, ":-fagbnc!fag@bnc PRIVMSG %s "
-			           ":first sync complete\r\n", g_sync_nick);
-			g_grab_logon = false;
-		}
-
-		if (!g_synced && g_last_num + SYNC_DELAY < time(NULL)) {
-			resync();
-			io_fprintf(g_clt_sck, ":-fagbnc!fag@bnc PRIVMSG %s "
-			                        ":synced\r\n", g_sync_nick);
-		}
-
-
 		char buf[1024];
 		int r = clt_read_line(buf, sizeof buf);
-		if (r == -1)
-			E("clt_read_line failed");
+		if (r == -1) {
+			EE("clt_read_line failed");
+			//setup_clt(true);
+		}
 		else if (r != 0) {
 			handle_clt_msg(buf);
 		}
 
-		process_sendQ();
+		if (IONLINE())
+			process_sendQ();
 	}
 }
 
@@ -182,10 +211,11 @@ static void
 process_irc(void)
 {
 	char *tok[MAX_IRCARGS];
-	int r = IREAD(tok, 16, 10000);
+	bool colon;
+	int r = IREAD(tok, 16, &colon, 10000);
 
 	if (r == 1) {
-		dump_irc_msg(tok, MAX_IRCARGS, NULL);
+		dump_irc_msg_ex(tok, MAX_IRCARGS, NULL, colon);
 
 		if (tok[1][0] >= '0' && tok[1][0] <= '9')
 			g_last_num = time(NULL);
@@ -193,12 +223,15 @@ process_irc(void)
 		handle_irc_msg(tok, MAX_IRCARGS);
 
 		char buf[1024];
-		join_irc_msg(buf, sizeof buf, (const char*const*)tok);
+		join_irc_msg(buf, sizeof buf, (const char*const*)tok, colon);
 
-		if (g_synced)
-			io_fprintf(g_clt_sck, "%s\r\n", buf);
-		else if (strcmp(tok[1], "PRIVMSG") == 0)
-			W("missing a PRIVMSG! (%s)", buf);
+		if (g_synced) {
+			clt_printf("%s\r\n", buf);
+			q_clear(g_irc_confirmQ);
+		} else {
+			if (strcmp(tok[1], "PRIVMSG") == 0)
+				q_add(g_irc_missQ, false, buf);
+		}
 	} else if (r == -1)
 		W("IREAD failed");
 }
@@ -261,9 +294,17 @@ handle_irc_msg(char **msg, size_t nelem)
 		handle_irc_353(msg[4], msg[5]);
 	} else if (strcmp(msg[1], "366") == 0) { //RPL_ENDOFNAMES
 		ucb_set_chan_sync(msg[3], true);
+	} else if (strcmp(msg[1], "PING") == 0) {
+		if (!g_synced) {
+			D("PING while desynced, queunig PONG");
+			char buf[512];
+			snprintf(buf, sizeof buf, "PONG :%s\r\n", msg[2]);
+			q_add(g_irc_sendQ, false, buf);
+		}
 	} else if (strcmp(msg[1], "PONG") == 0) {
 		free(g_needpong);
 		g_needpong = NULL;
+		g_last_clt_ping = 0;
 	} else if (strcmp(msg[1], "PRIVMSG") == 0
 	                                    && strstr(msg[3], "dump plx")) {
 		ucb_dump();//XXX remove this eventually
@@ -338,8 +379,10 @@ clt_read_line(char *dest, size_t destsz)
 
 	if (r == 1) {
 		r = io_read_line(g_clt_sck, dest, destsz);
-		if (r == -1)
-			EE("io_read_line failed");
+		if (r == -1) {
+			W("io_read_line() failed");
+			return -1;
+		}
 
 		char *end = dest + strlen(dest) - 1;
 		while (end >= dest && (*end == '\r' || *end == '\n'
@@ -356,6 +399,7 @@ static void
 handle_clt_msg(const char *line)
 {
 	static time_t firstline = 0;
+	D("from client: '%s'", line);
 	if (g_grab_logon) {
 		if (!firstline)
 			firstline = time(NULL);
@@ -402,19 +446,52 @@ handle_clt_msg(const char *line)
 		char *dup = strdup(line);
 		char *tok = strtok(dup+5, " ");
 		if (!g_synced) {
-			io_fprintf(g_clt_sck, ":%1$s PONG %1$s :%1$s\r\n",
+			g_last_clt_ping = 0;
+			D("not synced, fake a PONG (:%1$s PONG %1$s :%1$s)",
+			                                               tok);
+			clt_printf(":%1$s PONG %1$s :%1$s\r\n",
 			                                               tok);
 		} else {
+			g_last_clt_ping = time(NULL);
 			free(g_needpong);
 			g_needpong = strdup(tok);
+			D("synced, we need a PONG soon, fgt");
 		}
 		free(dup);
-		if (!g_synced)
+		if (!g_synced) {
+			D("not synced, we wont add this to irc sendQ");
 			return; //don't queue this ping
+		}
+	} else if (strncmp(line, "PRIVMSG ", 8) == 0) {
+		if (!g_synced) {
+			q_add(g_irc_outmissQ, false, line);
+		} else
+			q_add(g_irc_confirmQ, false, line);
 	}
 
 	q_add(g_irc_sendQ, false, line);
 }
+
+
+static int
+clt_printf(const char *fmt, ...)
+{
+	va_list l;
+	va_start(l, fmt);
+	char buf[1024];
+	vsnprintf(buf, sizeof buf, fmt, l);
+	char *p = buf+strlen(buf)-1;
+	if (*p != '\n')
+		W("line doesntend with \\n:");
+	while(p >= buf && (*p == '\n' || *p == '\r'))
+		*p-- = '\0';
+	D("to client: '%s'", buf);
+	va_end(l);
+	va_start(l, fmt);
+	int r = io_vfprintf(g_clt_sck, fmt, l);
+	va_end(l);
+	return r;
+}		
 
 
 static void
@@ -423,9 +500,9 @@ send_logon_conv()
 	const char * const* const* lc = ircbas_logonconv(g_irc);
 	for(int i = 0; i < 4; i++) {
 		char buf[1024];
-		join_irc_msg(buf, sizeof buf, lc[i]);
+		join_irc_msg(buf, sizeof buf, lc[i], true);
 
-		io_fprintf(g_clt_sck, "%s\r\n", buf);
+		clt_printf( "%s\r\n", buf);
 	}
 }
 
@@ -495,7 +572,7 @@ resync(void)
 		ucb_rename_user(g_sync_nick, ircbas_mynick(g_irc));
 		ucb_switch_base(false);
 
-		io_fprintf(g_clt_sck, ":%s!fix@me NICK %s\r\n", g_sync_nick,
+		clt_printf( ":%s!fix@me NICK %s\r\n", g_sync_nick,
 		                                      ircbas_mynick(g_irc));
 
 		strNcpy(g_sync_nick, ircbas_mynick(g_irc),
@@ -510,10 +587,10 @@ resync(void)
 		tok++;
 
 		if (added) {
-			io_fprintf(g_clt_sck, ":%s!fix@me JOIN %s\r\n",
+			clt_printf( ":%s!fix@me JOIN %s\r\n",
 			                         ircbas_mynick(g_irc), tok);
 		} else
-			io_fprintf(g_clt_sck, ":%s!fix@me PART %s :syn\r\n",
+			clt_printf( ":%s!fix@me PART %s :syn\r\n",
 			                         ircbas_mynick(g_irc), tok);
 		tok = strtok(NULL, ",");
 	}
@@ -540,17 +617,16 @@ resync(void)
 					c = 0;
 
 				if (add) {
-					io_fprintf(g_clt_sck, ":%s!fix@me "
+					clt_printf(":%s!fix@me "
 					                      "JOIN %s\r\n",
 					                      tok, chan);
 					if (c)
-						io_fprintf(g_clt_sck,
-						      ":fix.me MODE "
+						clt_printf(":fix.me MODE "
 						      "%s +%c %s\r\n", chan,
 						      translate_modepfx(c),
 						      tok);
 				} else
-					io_fprintf(g_clt_sck, ":%s!fix@me "
+					clt_printf(":%s!fix@me "
 					               "PART %s :synth\r\n",
 					               tok, chan);
 				break;
@@ -561,12 +637,12 @@ resync(void)
 				char new = tok[1];
 				tok += 2;
 				if (old != ' ')
-					io_fprintf(g_clt_sck, ":fix.me MODE"
+					clt_printf(":fix.me MODE"
 					             " %s -%c %s\r\n", chan,
 					             translate_modepfx(old),
 					             tok);
 				if (new != ' ')
-					io_fprintf(g_clt_sck, ":fix.me MODE"
+					clt_printf(":fix.me MODE"
 					             " %s +%c %s\r\n", chan,
 					             translate_modepfx(new),
 					             tok);
@@ -581,6 +657,17 @@ resync(void)
 	ucb_copy();	
 	ucb_switch_base(true);
 	g_synced = true;
+	
+	while(q_size(g_irc_missQ) > 0) {
+		clt_printf("%s\r\n", q_peek(g_irc_missQ, true));
+		q_pop(g_irc_missQ, true);
+	}
+
+	while(q_size(g_irc_outmissQ) > 0) {
+		q_add(g_irc_sendQ, false, q_peek(g_irc_outmissQ, true));
+		q_pop(g_irc_outmissQ, true);
+	}
+
 	N("resynced!");
 }
 
@@ -588,9 +675,11 @@ resync(void)
 static void
 process_sendQ(void)
 {
+	static time_t lastsend;
 	if (g_synced) {
-		if (q_size(g_irc_sendQ) > 0) {
+		if (q_size(g_irc_sendQ) > 0 && lastsend + SEND_DELAY <= time(NULL)) {
 			const char *msg = q_peek(g_irc_sendQ, true);
+			lastsend = time(NULL);
 			IWRITE(msg);
 			if (strncmp(msg, "QUIT", 4) == 0) {
 				N("relayed QUIT, shutting down");
@@ -605,22 +694,29 @@ process_sendQ(void)
 static void
 on_disconnect(void)
 {
+	D("on disconnect! synced: %d", g_synced);
 	if (g_synced) {
-		io_fprintf(g_clt_sck, ":-fagbnc!fag@bnc PRIVMSG %s "
-		                              ":desynced\r\n", g_sync_nick);
 		if (g_needpong) {
-			io_fprintf(g_clt_sck, ":%1$s PONG %1$s :%1$s\r\n",
-			                                        g_needpong);
+			clt_printf(":%1$s PONG %1$s :%1$s\r\n", g_needpong);
+			g_last_clt_ping = 0;
 			free(g_needpong);
 			g_needpong = NULL;
 		}
 
+		while(q_size(g_irc_confirmQ) > 0) {
+			q_add(g_irc_outmissQ, false, q_peek(g_irc_confirmQ, true));
+			q_pop(g_irc_confirmQ, true);
+		}
+
+		clt_printf(":-fagbnc!fag@bnc PRIVMSG %s "
+		                              ":desynced\r\n", g_sync_nick);
 		g_synced = false;
 		ucb_switch_base(false);
 	} else
 		W("disconnected while already desynced");
 
 	ucb_purge();
+	q_clear(g_irc_sendQ);
 }
 
 
@@ -665,7 +761,8 @@ translate_modepfx(char c)
 
 
 static void
-join_irc_msg(char *dest, size_t destsz, const char *const *msg)
+join_irc_msg(char *dest, size_t destsz, const char *const *msg,
+                                                            bool colonTrail)
 {
 	snprintf(dest, destsz, ":%s %s", msg[0], msg[1]);
 
@@ -673,7 +770,7 @@ join_irc_msg(char *dest, size_t destsz, const char *const *msg)
 	while(j < MAX_IRCARGS && msg[j]) {
 		strNcat(dest, " ", destsz);
 		//if ((j+1 == MAX_IRCARGS || !msg[j+1]) && strchr(msg[j],' '))
-		if ((j+1 == MAX_IRCARGS || !msg[j+1]))
+		if (colonTrail && (j+1 == MAX_IRCARGS || !msg[j+1]))
 			strNcat(dest, ":", destsz);
 		strNcat(dest, msg[j], destsz);
 		j++;
@@ -684,9 +781,17 @@ join_irc_msg(char *dest, size_t destsz, const char *const *msg)
 static bool
 dump_irc_msg(char **msg, size_t msg_len, void *tag)
 {
+	return dump_irc_msg_ex(msg, msg_len, tag, true);
+}
+
+
+static bool
+dump_irc_msg_ex(char **msg, size_t msg_len, void *tag, bool colonTrail)
+{
 	char msgbuf[1024];
-	sndumpmsg(msgbuf, sizeof msgbuf, tag, msg, msg_len);
-	D("%s", msgbuf);
+	join_irc_msg(msgbuf, sizeof msgbuf, (const char*const*)msg, colonTrail);
+	//sndumpmsg(msgbuf, sizeof msgbuf, tag, msg, msg_len);
+	D("from irc: %s", msgbuf);
 	return true;
 }
 
@@ -696,7 +801,7 @@ process_args(int *argc, char ***argv)
 {
 	char *a0 = (*argv)[0];
 
-	for(int ch; (ch = getopt(*argc, *argv, "vchi:p:s:k")) != -1;) {
+	for(int ch; (ch = getopt(*argc, *argv, "vchi:p:s:kl:")) != -1;) {
 		switch (ch) {
 		case 'i':
 			strNcpy(g_listen_if, optarg, sizeof g_listen_if);
@@ -706,6 +811,9 @@ process_args(int *argc, char ***argv)
 			break;
 		case 's':
 			strNcpy(g_irc_srv, optarg, sizeof g_irc_srv);
+			break;
+		case 'l':
+			g_max_lag = STRTOUS(optarg);
 			break;
 		case 'k':
 			g_keep_trying = true;
@@ -763,6 +871,9 @@ init(int *argc, char ***argv)
 
 	g_irc_sendQ = q_init();
 	g_irc_logonQ = q_init();
+	g_irc_confirmQ = q_init();
+	g_irc_missQ = q_init();
+	g_irc_outmissQ = q_init();
 
 	atexit(cleanup);
 
@@ -771,11 +882,86 @@ init(int *argc, char ***argv)
 
 
 static void
+setup_clt(bool resetup)
+{
+	D("%ssetting up client", resetup?"re-":"");
+	if (resetup)
+		close(g_clt_sck);
+
+	D("accepting a socket");
+	g_clt_sck = accept(g_listen_sck, NULL, NULL);
+
+	if (g_clt_sck == -1)
+		EE("failed to accept()");
+	N("accepted sockfd %d", g_clt_sck);
+
+	char buf[1024];
+	int r;
+	bool gotnick = false;
+	bool gotuser = false;
+	bool gotpass = false;
+	char *uname = NULL, *fname = NULL, *nick = NULL, *pass = NULL;
+	int conflags;
+	do {
+		r = io_read_line(g_clt_sck, buf, sizeof buf);	
+		if (r == -1)
+			E("io_read_line failed");
+		char *end = buf + strlen(buf) - 1;
+		while(end >= buf && (*end == '\n' || *end == '\r'
+		                                            || *end == ' '))
+			*end-- = '\0';
+
+		D("read line: '%s'", buf);
+
+		if (strncmp(buf, "PASS", 4) == 0) {
+			gotpass = true;
+			if (pass)
+				free(pass);
+			pass = strdup(strtok(buf+4, " "));
+			D("set pass to '%s'", pass);
+		} else if (strncmp(buf, "NICK", 4) == 0) {
+			gotnick = true;
+			if (nick)
+				free(nick);
+			nick = strdup(strtok(buf+4, " "));
+			D("set nick to '%s'", nick);
+		} else if (strncmp(buf, "USER", 4) == 0) {
+			gotuser = true;
+			if (uname)
+				free(uname);
+			uname = strdup(strtok(buf+4, " "));
+			D("set uname to '%s'", uname);
+			conflags = (int)strtol(strtok(NULL, " "), NULL, 10);
+			D("set conflags to %d", conflags);
+			strtok(NULL, " ");
+			if (fname)
+				free(fname);
+			fname = strdup(strtok(NULL, " ")+1);
+			D("set fname to '%s'", fname);
+		}
+	} while (!gotnick || !gotuser);
+	D("got NICK and USER");
+
+	if (!resetup) {
+		strNcpy(g_sync_nick, nick, sizeof g_sync_nick);
+		ircbas_set_nick(g_irc, nick);
+		if (gotpass)
+			ircbas_set_pass(g_irc, pass);
+		ircbas_set_uname(g_irc, uname);
+		ircbas_set_fname(g_irc, fname);
+		ircbas_set_conflags(g_irc, conflags);
+	}
+}
+
+static void
 cleanup(void)
 {
 	ucb_cleanup();
 	q_dispose(g_irc_logonQ);
 	q_dispose(g_irc_sendQ);
+	q_dispose(g_irc_confirmQ);
+	q_dispose(g_irc_missQ);
+	q_dispose(g_irc_outmissQ);
 }
 
 
@@ -814,57 +1000,15 @@ usage(FILE *str, const char *a0, int ec)
 int
 main(int argc, char **argv)
 {
-	int listen_sck = init(&argc, &argv);
+	g_listen_sck = init(&argc, &argv);
 	D("initialized");
 
-	g_clt_sck = accept(listen_sck, NULL, NULL);
-
-	if (g_clt_sck == -1)
-		EE("failed to accept()");
-
-	char buf[1024];
-	int r;
-	bool gotnick = false;
-	bool gotuser = false;
-	bool gotpass = false;
-	char *uname, *fname, *nick, *pass;
-	int conflags;
-	do {
-		r = io_read_line(g_clt_sck, buf, sizeof buf);	
-		if (r == -1)
-			E("io_read_line failed");
-		char *end = buf + strlen(buf) - 1;
-		while(end >= buf && (*end == '\n' || *end == '\r'
-		                                            || *end == ' '))
-			*end-- = '\0';
-
-		if (strncmp(buf, "PASS", 4) == 0) {
-			gotpass = true;
-			pass = strdup(strtok(buf+4, " "));
-		} else if (strncmp(buf, "NICK", 4) == 0) {
-			gotnick = true;
-			nick = strdup(strtok(buf+4, " "));
-		} else if (strncmp(buf, "USER", 4) == 0) {
-			gotuser = true;
-			uname = strdup(strtok(buf+4, " "));
-			conflags = (int)strtol(strtok(NULL, " "), NULL, 10);
-			strtok(NULL, " ");
-			fname = strdup(strtok(NULL, " ")+1);
-		}
-	} while (!gotnick || !gotuser);
-
-	strNcpy(g_sync_nick, nick, sizeof g_sync_nick);
-	ircbas_set_nick(g_irc, nick);
-	if (gotpass)
-		ircbas_set_pass(g_irc, pass);
-	ircbas_set_uname(g_irc, uname);
-	ircbas_set_fname(g_irc, fname);
-	ircbas_set_conflags(g_irc, conflags);
+	setup_clt(false);
 
 	life();
 
 	IDISPOSE();
-	close(listen_sck);
+	close(g_listen_sck);
 	close(g_clt_sck);
 
 	return EXIT_SUCCESS;
