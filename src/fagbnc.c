@@ -76,6 +76,7 @@ static time_t g_last_num;
 static bool g_shutdown;
 static bool g_keep_trying;
 static int g_max_lag;
+static char *g_prim_nick;
 
 static void* g_irc_sendQ;
 static void* g_irc_logonQ;
@@ -271,6 +272,11 @@ handle_irc_msg(char **msg, size_t nelem)
 		}
 	} else if (strcmp(msg[1], "QUIT") == 0) {
 		ucb_drop_user_all(nick);
+		if (ISTRCASECMP(nick, g_prim_nick) == 0) {
+			char buf[512];
+			snprintf(buf, sizeof buf, "NICK %s\r\n", g_prim_nick);
+			q_add(g_irc_sendQ, false, buf);
+		}
 	} else if (strcmp(msg[1], "NICK") == 0) {
 		if (ISTRCASECMP(ircbas_mynick(g_irc), msg[2]) != 0) {
 			ucb_rename_user(nick, msg[2]);
@@ -668,6 +674,12 @@ resync(void)
 		q_pop(g_irc_outmissQ, true);
 	}
 
+	if (ISTRCASECMP(ircbas_mynick(g_irc), g_prim_nick) != 0) {
+		char buf[512];
+		snprintf(buf, sizeof buf, "NICK %s\r\n", g_prim_nick);
+		q_add(g_irc_sendQ, false, buf);
+	}
+
 	N("resynced!");
 }
 
@@ -884,7 +896,7 @@ init(int *argc, char ***argv)
 static void
 setup_clt(void)
 {
-	D("%ssetting up client");
+	D("setting up client");
 
 	D("accepting a socket");
 	g_clt_sck = accept(g_listen_sck, NULL, NULL);
@@ -922,6 +934,8 @@ setup_clt(void)
 			if (nick)
 				free(nick);
 			nick = strdup(strtok(buf+4, " "));
+			if (!g_prim_nick)
+				g_prim_nick = strdup(nick);
 			D("set nick to '%s'", nick);
 		} else if (strncmp(buf, "USER", 4) == 0) {
 			gotuser = true;
