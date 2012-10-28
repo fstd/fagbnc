@@ -116,7 +116,7 @@ static bool dump_irc_msg_ex(char **msg, size_t msg_len, void *tag,
 
 static void process_args(int *argc, char ***argv);
 static int init(int *argc, char ***argv);
-static void setup_clt(bool resetup);
+static void setup_clt();
 static void cleanup(void);
 static void log_reinit(void);
 static void usage(FILE *str, const char *a0, int ec);
@@ -882,11 +882,9 @@ init(int *argc, char ***argv)
 
 
 static void
-setup_clt(bool resetup)
+setup_clt()
 {
-	D("%ssetting up client", resetup?"re-":"");
-	if (resetup)
-		close(g_clt_sck);
+	D("%ssetting up client");
 
 	D("accepting a socket");
 	g_clt_sck = accept(g_listen_sck, NULL, NULL);
@@ -942,15 +940,13 @@ setup_clt(bool resetup)
 	} while (!gotnick || !gotuser);
 	D("got NICK and USER");
 
-	if (!resetup) {
-		strNcpy(g_sync_nick, nick, sizeof g_sync_nick);
-		ircbas_set_nick(g_irc, nick);
-		if (gotpass)
-			ircbas_set_pass(g_irc, pass);
-		ircbas_set_uname(g_irc, uname);
-		ircbas_set_fname(g_irc, fname);
-		ircbas_set_conflags(g_irc, conflags);
-	}
+	strNcpy(g_sync_nick, nick, sizeof g_sync_nick);
+	ircbas_set_nick(g_irc, nick);
+	if (gotpass)
+		ircbas_set_pass(g_irc, pass);
+	ircbas_set_uname(g_irc, uname);
+	ircbas_set_fname(g_irc, fname);
+	ircbas_set_conflags(g_irc, conflags);
 }
 
 static void
@@ -1003,7 +999,7 @@ main(int argc, char **argv)
 	g_listen_sck = init(&argc, &argv);
 	D("initialized");
 
-	setup_clt(false);
+	setup_clt();
 
 	life();
 
