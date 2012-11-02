@@ -167,14 +167,14 @@ life(void)
 			process_irc();
 
 			if (g_grab_logon && g_last_num + LGRAB_TIME < time(NULL)) {
-				clt_printf(":-fagbnc!fag@bnc PRIVMSG %s "
+				clt_printf(":-fagbnc!fag@bnc NOTICE %s "
 					   ":first sync complete\r\n", g_sync_nick);
 				g_grab_logon = false;
 			}
 
 			if (!g_synced && g_last_num + SYNC_DELAY < time(NULL)) {
 				resync();
-				clt_printf(":-fagbnc!fag@bnc PRIVMSG %s "
+				clt_printf(":-fagbnc!fag@bnc NOTICE %s "
 							":synced\r\n", g_sync_nick);
 			}
 
@@ -720,7 +720,7 @@ on_disconnect(void)
 			q_pop(g_irc_confirmQ, true);
 		}
 
-		clt_printf(":-fagbnc!fag@bnc PRIVMSG %s "
+		clt_printf(":-fagbnc!fag@bnc NOTICE %s "
 		                              ":desynced\r\n", g_sync_nick);
 		g_synced = false;
 		ucb_switch_base(false);
