@@ -505,6 +505,7 @@ handle_clt_msg(const char *line)
 		if (strncmp (line+8,"-fagbnc :", 9) == 0) {
 			//fagbnc internal command
 			handle_fagcmd(line+9+8);
+			return; //don't queue internal commands
 		} else {
 			if (!g_synced) {
 				q_add(g_irc_outmissQ, false, line);
@@ -514,7 +515,6 @@ handle_clt_msg(const char *line)
 				//Q_DUMP(g_irc_confirmQ);
 			}
 		}
-		return; //don't queue internal commands
 	}
 
 	q_add(g_irc_sendQ, false, line);
