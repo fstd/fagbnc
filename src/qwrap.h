@@ -18,6 +18,8 @@ void q_clear(void *q);
 void q_dispose(void *q);
 void q_dump(void *q, const char *label);
 
+#define Q_DUMP(Q) q_dump((Q),(#Q))
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

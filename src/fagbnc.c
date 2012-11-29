@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include <unistd.h>
+#include <signal.h>
 
 #include <common.h>
 #include <libsrsirc/irc_basic.h>
@@ -29,6 +30,7 @@
 
 
 #define STRTOUS(STR) ((unsigned short)strtol((STR), NULL, 10))
+#define STRTOI(STR) ((int)strtol((STR), NULL, 10))
 #define DEF_LISTENPORT ((unsigned short)7778)
 #define DEF_LISTENIF "0.0.0.0"
 #define MAX_IRCARGS 16
@@ -51,7 +53,7 @@
 #define ISTRCASECMP(A,B) istrcasecmp((A),(B),ircbas_casemap(g_irc))
 #define ISTRNCASECMP(A,B,N) istrncasecmp((A),(B),(N),ircbas_casemap(g_irc))
 
-
+typedef void (*sig_t) (int);
 
 static int g_verb = LOGLVL_WARN;
 static bool g_fancy = false;
@@ -75,8 +77,10 @@ static char *g_needpong;
 static time_t g_last_num;
 static bool g_shutdown;
 static bool g_keep_trying;
+static volatile bool g_hup;
 static int g_max_lag;
 static char *g_prim_nick;
+static int g_hup_wait_time;
 
 static void* g_irc_sendQ;
 static void* g_irc_logonQ;
@@ -94,6 +98,7 @@ static void handle_irc_cmode(const char *chan, const char *const *modes);
 
 static int clt_read_line(char *dest, size_t destsz);
 static void handle_clt_msg(const char *line);
+static void handle_fagcmd(const char *line);
 
 static int clt_printf(const char *fmt, ...);
 static void send_logon_conv();
@@ -122,6 +127,7 @@ static void cleanup(void);
 static void log_reinit(void);
 static void usage(FILE *str, const char *a0, int ec);
 int main(int argc, char **argv);
+void sighnd(int sig);
 
 
 
@@ -130,22 +136,29 @@ life(void)
 {
 	bool fresh = true;
 	g_next_con_try = time(NULL);
-
 	for(;;) {
 		if (!IONLINE()) {
+			D("not online! (fresh: %d, shutdown: %d, nextcontry: %ld)",
+				fresh, g_shutdown, g_next_con_try);
+
 			if (g_shutdown)
 				break;
 
-			if (!g_next_con_try && !fresh)
+			if (!g_next_con_try && !fresh) {
+				N("calling disconnect handler");
 				on_disconnect();
+			}
 
 			if (g_next_con_try <= time(NULL)) {
+				N("time for connect has arrived, connecting");
 				if (ICONNECT(30)) {
+					N("connected (fresh: %d)", fresh);
 					if (fresh) {
 						strNcpy(g_sync_nick,
 						       ircbas_mynick(g_irc),
 						       sizeof g_sync_nick);
 						fresh = false;
+						D("not fresh anymore, saved syncnick as '%s', sending logon conv now", g_sync_nick);
 						send_logon_conv();
 					} else
 						replay_logon();
@@ -156,7 +169,7 @@ life(void)
 					if (fresh && !g_keep_trying)
 						E("failed to connect");
 
-					N("waiting 30 sec");
+					W("failed to connect, attempting next connect in 30 seconds");
 					g_next_con_try = time(NULL) + 30;
 				}
 			}
@@ -167,12 +180,14 @@ life(void)
 			process_irc();
 
 			if (g_grab_logon && g_last_num + LGRAB_TIME < time(NULL)) {
+				N("first sync complete, disabling g_grab_logon which was %d", g_grab_logon);
 				clt_printf(":-fagbnc!fag@bnc NOTICE %s "
 					   ":first sync complete\r\n", g_sync_nick);
 				g_grab_logon = false;
 			}
 
 			if (!g_synced && g_last_num + SYNC_DELAY < time(NULL)) {
+				N("time for resync has come");
 				resync();
 				clt_printf(":-fagbnc!fag@bnc NOTICE %s "
 							":synced\r\n", g_sync_nick);
@@ -180,9 +195,19 @@ life(void)
 
 			if (g_synced && g_max_lag && g_last_clt_ping &&
 					  time(NULL)-g_last_clt_ping > g_max_lag) {
-				W("too laggy, assuming d/c");
+				W("too laggy (%d sec), assuming d/c, resetting irc backend", g_max_lag);
 				IRESET();
 				continue;
+			}
+
+			if (g_synced && g_hup) {
+				W("SIGHUP causing a hard reset (as intended)");
+				g_hup = false;
+				IRESET();
+				N("calling disconnect handler sicne we were synced");
+				on_disconnect();
+				N("next connection attempt in %d seconds", g_hup_wait_time);
+				g_next_con_try = time(NULL) + g_hup_wait_time;
 			}
 		} else
 			usleep(20000);
@@ -230,8 +255,11 @@ process_irc(void)
 			clt_printf("%s\r\n", buf);
 			q_clear(g_irc_confirmQ);
 		} else {
-			if (strcmp(tok[1], "PRIVMSG") == 0)
+			if (strcmp(tok[1], "PRIVMSG") == 0) {
 				q_add(g_irc_missQ, false, buf);
+				N("added to missQ: '%s'", buf);
+				//Q_DUMP(g_irc_missQ);
+			}
 		}
 	} else if (r == -1)
 		W("IREAD failed");
@@ -273,9 +301,11 @@ handle_irc_msg(char **msg, size_t nelem)
 	} else if (strcmp(msg[1], "QUIT") == 0) {
 		ucb_drop_user_all(nick);
 		if (ISTRCASECMP(nick, g_prim_nick) == 0) {
+			N("getting our nick back...");
 			char buf[512];
 			snprintf(buf, sizeof buf, "NICK %s\r\n", g_prim_nick);
 			q_add(g_irc_sendQ, false, buf);
+			//Q_DUMP(g_irc_sendQ);
 		}
 	} else if (strcmp(msg[1], "NICK") == 0) {
 		if (ISTRCASECMP(ircbas_mynick(g_irc), msg[2]) != 0) {
@@ -306,6 +336,7 @@ handle_irc_msg(char **msg, size_t nelem)
 			char buf[512];
 			snprintf(buf, sizeof buf, "PONG :%s\r\n", msg[2]);
 			q_add(g_irc_sendQ, false, buf);
+			//Q_DUMP(g_irc_sendQ);
 		}
 	} else if (strcmp(msg[1], "PONG") == 0) {
 		free(g_needpong);
@@ -425,8 +456,10 @@ handle_clt_msg(const char *line)
 		else
 			snprintf(buf, sizeof buf, "%d %s", secoff, line);
 
-		if (strlen(buf) > 0)
+		if (strlen(buf) > 0) {
 			q_add(g_irc_logonQ, false, buf);
+			//Q_DUMP(g_irc_logonQ);
+		}
 	}
 
 	if (strncmp(line, "JOIN ", 5) == 0) {
@@ -469,15 +502,91 @@ handle_clt_msg(const char *line)
 			return; //don't queue this ping
 		}
 	} else if (strncmp(line, "PRIVMSG ", 8) == 0) {
-		if (!g_synced) {
-			q_add(g_irc_outmissQ, false, line);
-		} else
-			q_add(g_irc_confirmQ, false, line);
+		if (strncmp (line+8,"-fagbnc :", 9) == 0) {
+			//fagbnc internal command
+			handle_fagcmd(line+9+8);
+		} else {
+			if (!g_synced) {
+				q_add(g_irc_outmissQ, false, line);
+				//Q_DUMP(g_irc_outmissQ);
+			} else {
+				q_add(g_irc_confirmQ, false, line);
+				//Q_DUMP(g_irc_confirmQ);
+			}
+		}
+		return; //don't queue internal commands
 	}
 
 	q_add(g_irc_sendQ, false, line);
+	//Q_DUMP(g_irc_sendQ);
 }
 
+
+static void
+handle_fagcmd(const char *line)
+{
+	D("fagcmd: '%s'", line);
+	if (strncmp(line, "DUMPREPQ", 8) == 0) {
+		void *tmpQ = q_init();
+
+		int i = 0;
+		while(q_size(g_irc_logonQ) > 0) {
+			const char *line = q_peek(g_irc_logonQ, true);
+			q_pop(g_irc_logonQ, true);
+			q_add(tmpQ, false, line);
+
+			clt_printf(":-fagbnc PRIVMSG %s :%d: %s\r\n", ircbas_mynick(g_irc), i, line);
+			i++;
+		}
+
+		while(q_size(tmpQ) > 0) {
+			const char *line = q_peek(tmpQ, true);
+			q_pop(tmpQ, true);
+			q_add(g_irc_logonQ, false, line);
+		}
+
+		q_dispose(tmpQ);
+	} else if (strncmp(line, "DROPREPQ ", 9) == 0) {
+		int elem = STRTOI(line+9);
+		bool success = false;
+		void *tmpQ = q_init();
+
+		int i = 0;
+		while(q_size(g_irc_logonQ) > 0) {
+			const char *line = q_peek(g_irc_logonQ, true);
+			q_pop(g_irc_logonQ, true);
+			if (i != elem) {
+				q_add(tmpQ, false, line);
+			} else {
+				free((char*)line);
+				success = true;
+			}
+
+			i++;
+		}
+
+		while(q_size(tmpQ) > 0) {
+			const char *line = q_peek(tmpQ, true);
+			q_pop(tmpQ, true);
+			q_add(g_irc_logonQ, false, line);
+		}
+
+		clt_printf(":-fagbnc PRIVMSG %s :%s element %d\r\n", ircbas_mynick(g_irc), success?"dropped":"failed to drop", elem);
+	} else if (strncmp(line, "DUMPVERB", 8) == 0) {
+		int n = log_count_mods();
+		for(int i = 0; i < n; i++) {
+			clt_printf(":-fagbnc PRIVMSG %s :mod '%s', verb: %d\r\n", ircbas_mynick(g_irc), log_get_mod(i), log_get_level(log_get_mod(i)));
+		}
+	} else if (strncmp(line, "SETVERB ", 8) == 0) {
+		char *dup = strdup(line+8);
+		char *mod = strdup(strtok(dup, " "));
+		int verb = STRTOI(strtok(NULL, " "));
+
+		log_set_level(mod, verb);
+		free(mod);
+		free(dup);
+	}
+}
 
 static int
 clt_printf(const char *fmt, ...)
@@ -520,7 +629,8 @@ replay_logon(void)
 	void *tmpQ = q_init();
 	time_t tstart = time(NULL);
 	int lastoff = -1;
-	while(q_size(g_irc_logonQ)) {
+	//Q_DUMP(g_irc_logonQ);
+	while(q_size(g_irc_logonQ) > 0) {
 		char *dup = strdup(q_peek(g_irc_logonQ, true));
 		char *orig = strdup(dup);
 		char *tok = strtok(dup, " ");
@@ -538,6 +648,8 @@ replay_logon(void)
 		if (off != lastoff || q_size(g_irc_logonQ) == 0) {
 			while (tstart + lastoff > time(NULL))
 				sleep(1);
+
+			//Q_DUMP(tmpQ);
 
 			while(q_size(tmpQ)) {
 				const char *l = q_peek(tmpQ, true);
@@ -560,10 +672,14 @@ replay_logon(void)
 		free(dup);
 	}
 
+	//Q_DUMP(bakQ);
+
 	while(q_size(bakQ)) {
 		q_add(g_irc_logonQ, false, q_peek(bakQ, true));
 		q_pop(bakQ, true);
 	}
+
+	//Q_DUMP(g_irc_logonQ);
 
 	q_dispose(bakQ);
 	q_dispose(tmpQ);
@@ -664,21 +780,25 @@ resync(void)
 	ucb_switch_base(true);
 	g_synced = true;
 	
+	//Q_DUMP(g_irc_missQ);
 	while(q_size(g_irc_missQ) > 0) {
 		clt_printf("%s\r\n", q_peek(g_irc_missQ, true));
 		q_pop(g_irc_missQ, true);
 	}
 
+	//Q_DUMP(g_irc_outmissQ);
 	while(q_size(g_irc_outmissQ) > 0) {
 		q_add(g_irc_sendQ, false, q_peek(g_irc_outmissQ, true));
 		q_pop(g_irc_outmissQ, true);
 	}
+	//Q_DUMP(g_irc_sendQ);
 
 	if (ISTRCASECMP(ircbas_mynick(g_irc), g_prim_nick) != 0) {
 		char buf[512];
 		snprintf(buf, sizeof buf, "NICK %s\r\n", g_prim_nick);
 		q_add(g_irc_sendQ, false, buf);
 	}
+	//Q_DUMP(g_irc_sendQ);
 
 	N("resynced!");
 }
@@ -698,6 +818,7 @@ process_sendQ(void)
 				g_shutdown = time(NULL) + SHUTDOWN_TIME;
 			}
 			q_pop(g_irc_sendQ, true);
+			//Q_DUMP(g_irc_sendQ);
 		}
 	}
 }
@@ -715,10 +836,12 @@ on_disconnect(void)
 			g_needpong = NULL;
 		}
 
+		//Q_DUMP(g_irc_confirmQ);
 		while(q_size(g_irc_confirmQ) > 0) {
 			q_add(g_irc_outmissQ, false, q_peek(g_irc_confirmQ, true));
 			q_pop(g_irc_confirmQ, true);
 		}
+		//Q_DUMP(g_irc_outmissQ);
 
 		clt_printf(":-fagbnc!fag@bnc NOTICE %s "
 		                              ":desynced\r\n", g_sync_nick);
@@ -729,6 +852,7 @@ on_disconnect(void)
 
 	ucb_purge();
 	q_clear(g_irc_sendQ);
+	//Q_DUMP(g_irc_sendQ);
 }
 
 
@@ -813,7 +937,7 @@ process_args(int *argc, char ***argv)
 {
 	char *a0 = (*argv)[0];
 
-	for(int ch; (ch = getopt(*argc, *argv, "vchi:p:s:kl:")) != -1;) {
+	for(int ch; (ch = getopt(*argc, *argv, "vchi:p:s:kl:w:")) != -1;) {
 		switch (ch) {
 		case 'i':
 			strNcpy(g_listen_if, optarg, sizeof g_listen_if);
@@ -825,7 +949,10 @@ process_args(int *argc, char ***argv)
 			strNcpy(g_irc_srv, optarg, sizeof g_irc_srv);
 			break;
 		case 'l':
-			g_max_lag = STRTOUS(optarg);
+			g_max_lag = STRTOI(optarg);
+			break;
+		case 'w':
+			g_hup_wait_time = STRTOI(optarg);
 			break;
 		case 'k':
 			g_keep_trying = true;
@@ -1010,6 +1137,7 @@ usage(FILE *str, const char *a0, int ec)
 int
 main(int argc, char **argv)
 {
+	signal(SIGHUP, sighnd);
 	g_listen_sck = init(&argc, &argv);
 	D("initialized");
 
@@ -1022,4 +1150,18 @@ main(int argc, char **argv)
 	close(g_clt_sck);
 
 	return EXIT_SUCCESS;
+}
+
+void
+sighnd(int sig)
+{
+	switch(sig)
+	{
+	case SIGHUP:
+		D("caught HUP");
+		g_hup = true;
+		break;
+	default:
+		W("caught unknown signal %d", sig);
+	}
 }
