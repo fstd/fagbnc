@@ -46,7 +46,7 @@
 #define IRESET() ircbas_reset(g_irc)
 #define IDISPOSE() ircbas_dispose(g_irc)
 #define ICONNECT(TOUT) ircbas_connect(g_irc, (TOUT)*1000000ul)
-#define IREAD(TOK,TOKLEN,CT,TO_US) ircbas_read(g_irc,(TOK),(TOKLEN),(CT),(TO_US))
+#define IREAD(TOK,TOKLEN,TO_US) ircbas_read(g_irc,(TOK),(TOKLEN),(TO_US))
 #define IWRITE(LINE) ircbas_write(g_irc, (LINE))
 #define IONLINE() ircbas_online(g_irc)
 #define ICASEMAP() ircbas_casemap(g_irc)
@@ -160,8 +160,10 @@ life(void)
 						fresh = false;
 						D("not fresh anymore, saved syncnick as '%s', sending logon conv now", g_sync_nick);
 						send_logon_conv();
-					} else
+					} else {
+						D("replaying logon");
 						replay_logon();
+					}
 
 					g_last_num = time(NULL);
 					g_next_con_try = 0;
@@ -237,8 +239,9 @@ static void
 process_irc(void)
 {
 	char *tok[MAX_IRCARGS];
-	bool colon;
-	int r = IREAD(tok, 16, &colon, 10000);
+	int r = IREAD(tok, 16, 10000);
+	bool colon = ircbas_colon_trail(g_irc);
+
 
 	if (r == 1) {
 		dump_irc_msg_ex(tok, MAX_IRCARGS, NULL, colon);
@@ -436,7 +439,7 @@ static void
 handle_clt_msg(const char *line)
 {
 	static time_t firstline = 0;
-	D("from client: '%s'", line);
+	D("handling from client: '%s'", line);
 	if (g_grab_logon) {
 		if (!firstline)
 			firstline = time(NULL);
@@ -453,6 +456,8 @@ handle_clt_msg(const char *line)
 		                         || strncmp("PING", line, 4) == 0
 		                         || strncmp("NOTICE", line, 6) == 0) 
 			buf[0] = '\0'; //exclude these for now
+		else if (strncmp("PRIVMSG -fagbnc ", line, 15) == 0)
+			;//exclude
 		else
 			snprintf(buf, sizeof buf, "%d %s", secoff, line);
 
@@ -517,7 +522,8 @@ handle_clt_msg(const char *line)
 		}
 	}
 
-	q_add(g_irc_sendQ, false, line);
+	if (g_synced)
+		q_add(g_irc_sendQ, false, line);
 	//Q_DUMP(g_irc_sendQ);
 }
 
