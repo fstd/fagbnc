@@ -14,13 +14,19 @@
 #include <unistd.h>
 #include <signal.h>
 
+#include <syslog.h>
+#include <time.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+
+
 #include <common.h>
 #include <libsrsirc/irc_basic.h>
 #include <libsrsirc/irc_con.h>
 #include <libsrsirc/irc_io.h>
 #include <libsrsirc/irc_util.h>
 
-#include <libsrslog/log.h>
+#include "intlog.h"
 #include <libsrsbsns/addr.h>
 #include <libsrsbsns/io.h>
 
@@ -55,8 +61,7 @@
 
 typedef void (*sig_t) (int);
 
-static int g_verb = LOGLVL_WARN;
-static bool g_fancy = false;
+static int g_verb = LOG_WARNING;
 
 static char g_listen_if[256];
 static char g_irc_srv[256];
@@ -77,6 +82,7 @@ static char *g_needpong;
 static time_t g_last_num;
 static bool g_shutdown;
 static bool g_keep_trying;
+static bool g_no_fork;
 static volatile bool g_hup;
 static int g_max_lag;
 static char *g_prim_nick;
@@ -122,9 +128,10 @@ static bool dump_irc_msg_ex(char **msg, size_t msg_len, void *tag,
 
 static void process_args(int *argc, char ***argv);
 static int init(int *argc, char ***argv);
+static void detach(void);
+static void daemonize(void);
 static void setup_clt(void);
 static void cleanup(void);
-static void log_reinit(void);
 static void usage(FILE *str, const char *a0, int ec);
 int main(int argc, char **argv);
 void sighnd(int sig);
@@ -578,18 +585,11 @@ handle_fagcmd(const char *line)
 		}
 
 		clt_printf(":-fagbnc PRIVMSG %s :%s element %d\r\n", ircbas_mynick(g_irc), success?"dropped":"failed to drop", elem);
-	} else if (strncmp(line, "DUMPVERB", 8) == 0) {
-		int n = log_count_mods();
-		for(int i = 0; i < n; i++) {
-			clt_printf(":-fagbnc PRIVMSG %s :mod '%s', verb: %d\r\n", ircbas_mynick(g_irc), log_get_mod(i), log_get_level(log_get_mod(i)));
-		}
 	} else if (strncmp(line, "SETVERB ", 8) == 0) {
 		char *dup = strdup(line+8);
-		char *mod = strdup(strtok(dup, " "));
-		int verb = STRTOI(strtok(NULL, " "));
+		int verb = STRTOI(strtok(dup, " "));
 
-		log_set_level(mod, verb);
-		free(mod);
+		ilog_setlvl(verb);
 		free(dup);
 	}
 }
@@ -943,7 +943,7 @@ process_args(int *argc, char ***argv)
 {
 	char *a0 = (*argv)[0];
 
-	for(int ch; (ch = getopt(*argc, *argv, "vchi:p:s:kl:w:")) != -1;) {
+	for(int ch; (ch = getopt(*argc, *argv, "vqchi:p:s:kl:w:n")) != -1;) {
 		switch (ch) {
 		case 'i':
 			strNcpy(g_listen_if, optarg, sizeof g_listen_if);
@@ -960,16 +960,22 @@ process_args(int *argc, char ***argv)
 		case 'w':
 			g_hup_wait_time = STRTOI(optarg);
 			break;
+		case 'n':
+			g_no_fork = true;
+			break;
 		case 'k':
 			g_keep_trying = true;
 			break;
 		case 'c':
-			g_fancy = true;
-			log_reinit();
+			ilog_setfancy(true);
+			break;
+		case 'q':
+			g_verb--;
+			ilog_setlvl(g_verb);
 			break;
 		case 'v':
 			g_verb++;
-			log_reinit();
+			ilog_setlvl(g_verb);
 			break;
 		case 'h':
 			usage(stdout, a0, EXIT_SUCCESS);
@@ -986,7 +992,7 @@ process_args(int *argc, char ***argv)
 static int
 init(int *argc, char ***argv)
 {
-	log_reinit();
+	ilog_stderr();
 
 	strNcpy(g_listen_if, DEF_LISTENIF, sizeof g_listen_if);
 
@@ -994,6 +1000,12 @@ init(int *argc, char ***argv)
 
 	if (strlen(g_irc_srv) == 0)
 		E("no server given (need -s)");
+
+	if (!g_no_fork) {
+		D("forking to background");
+		ilog_syslog("fagbnc", LOG_USER);
+		daemonize();
+	}
 
 	char host[256];
 	unsigned short port;
@@ -1003,7 +1015,7 @@ init(int *argc, char ***argv)
 	ircbas_regcb_conread(g_irc, dump_irc_msg, 0);
 	ircbas_set_server(g_irc, host, port);
 
-	int listen_sck = addr_bind_socket(g_listen_if, g_irc_port);
+	int listen_sck = addr_bind_socket_p(g_listen_if, g_irc_port, NULL, NULL, 0, 0);
 	if (listen_sck == -1)
 		EE("couldn't bind to '%s:%hu'", g_listen_if, g_irc_port);
 
@@ -1023,6 +1035,56 @@ init(int *argc, char ***argv)
 	atexit(cleanup);
 
 	return listen_sck;
+}
+
+
+static void
+detach(void)
+{
+	int r;
+
+	/* ignore signals associated with job control */
+	signal(SIGTSTP, SIG_IGN);
+	signal(SIGTTOU, SIG_IGN);
+	signal(SIGTTIN, SIG_IGN);
+
+	if ((r = fork()) == -1)
+		E("failed to fork, exiting!");
+	else if (r > 0)
+		exit(EXIT_SUCCESS);
+
+	setsid(); /* create a new session, become session leader */
+}
+
+
+static void
+daemonize(void)
+{
+	detach();
+
+	struct rlimit rlim;
+	int fdmax;
+	if (getrlimit(RLIMIT_NOFILE, &rlim) != 0) {
+		WE("getrlimit() failed when asked for RLIMIT_NOFILE");
+		fdmax = 2; /* assume only std{in,out,err} are open */
+	} else
+		fdmax = rlim.rlim_max;
+
+	/* close all file descriptors */
+	for (int i = 0; i <= fdmax; i++)
+		close(i);
+
+	umask(0);
+	if (chdir("/") != 0)
+		WE("couldn't chdir to /");
+
+	int r;
+	if ((r = fork()) == -1)
+		EE("2nd fork failed, exiting!");
+	else if (r > 0)
+		exit(EXIT_SUCCESS);
+
+	umask(0); //not sure if neccessary
 }
 
 
@@ -1109,19 +1171,6 @@ cleanup(void)
 
 
 static void
-log_reinit(void)
-{
-	log_set_deflevel(g_verb);
-	log_set_deffancy(g_fancy);
-	int n = log_count_mods();
-	for(int i = 0; i < n; i++) {
-		log_set_level(log_get_mod(i), g_verb);
-		log_set_fancy(log_get_mod(i), g_fancy);
-	}
-}
-
-
-static void
 usage(FILE *str, const char *a0, int ec)
 {
 	#define SH(STR) if (sh) fputs(STR "\n", str)
@@ -1130,7 +1179,20 @@ usage(FILE *str, const char *a0, int ec)
 	BH("==================================");
 	BH("== fagbnc - the pretty cool bnc ==");
 	BH("==================================");
-	fprintf(str, "usage: %s [-vch]\n", a0);
+	fprintf(str, "usage: %s [-vchi:p:s:kl:w:n]\n", a0);
+	BH("");
+	BH("\t -i: <str> listen interface addr");
+	BH("\t -p: <int> remote server port");
+	BH("\t -s: <str> remote server hostname or IP");
+	BH("\t -l: <int> max lag in seconds");
+	BH("\t -w: <int> wait time in seconds to sleep on a HUP");
+	BH("");
+	BH("\t -n: don't fork");
+	BH("\t -k: keep trying, if first connect fails");
+	BH("\t -c: use bash color sequences on stderr");
+	BH("\t -v: increase verbosity");
+	BH("\t -q: decrease verbosity");
+	BH("\t -h: display usage statement and terminate");
 	BH("");
 	BH("(C) 2012, fisted (contact: #fstd @ irc.freenode.org)");
 	#undef SH

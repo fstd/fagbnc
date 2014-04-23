@@ -17,7 +17,7 @@ extern "C" {
 #include <common.h>
 
 #include <libsrsirc/irc_util.h>
-#include <libsrslog/log.h>
+#include "intlog.h"
 }
 
 class usercmp

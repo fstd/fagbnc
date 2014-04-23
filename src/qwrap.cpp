@@ -9,7 +9,7 @@
 
 extern "C" {
 #include <libsrsirc/irc_util.h>
-#include <libsrslog/log.h>
+#include "intlog.h"
 }
 
 typedef std::deque<std::string> queue_t;
