@@ -138,7 +138,7 @@ life(void)
 	g_next_con_try = time(NULL);
 	for(;;) {
 		if (!IONLINE()) {
-			D("not online! (fresh: %d, shutdown: %d, nextcontry: %ld)",
+			N("not online! (fresh: %d, shutdown: %d, nextcontry: %ld)",
 				fresh, g_shutdown, g_next_con_try);
 
 			if (g_shutdown)
@@ -158,10 +158,10 @@ life(void)
 						       ircbas_mynick(g_irc),
 						       sizeof g_sync_nick);
 						fresh = false;
-						D("not fresh anymore, saved syncnick as '%s', sending logon conv now", g_sync_nick);
+						N("not fresh anymore, saved syncnick as '%s', sending logon conv now", g_sync_nick);
 						send_logon_conv();
 					} else {
-						D("replaying logon");
+						N("replaying logon");
 						replay_logon();
 					}
 
@@ -335,7 +335,7 @@ handle_irc_msg(char **msg, size_t nelem)
 		ucb_set_chan_sync(msg[3], true);
 	} else if (strcmp(msg[1], "PING") == 0) {
 		if (!g_synced) {
-			D("PING while desynced, queunig PONG");
+			N("PING while desynced, queueing PONG");
 			char buf[512];
 			snprintf(buf, sizeof buf, "PONG :%s\r\n", msg[2]);
 			q_add(g_irc_sendQ, false, buf);
@@ -491,7 +491,7 @@ handle_clt_msg(const char *line)
 		char *tok = strtok(dup+5, " ");
 		if (!g_synced) {
 			g_last_clt_ping = 0;
-			D("not synced, fake a PONG (:%1$s PONG %1$s :%1$s)",
+			N("not synced, fake a PONG (:%1$s PONG %1$s :%1$s)",
 			                                               tok);
 			clt_printf(":%1$s PONG %1$s :%1$s\r\n",
 			                                               tok);
@@ -499,11 +499,11 @@ handle_clt_msg(const char *line)
 			g_last_clt_ping = time(NULL);
 			free(g_needpong);
 			g_needpong = strdup(tok);
-			D("synced, we need a PONG soon, fgt");
+			N("synced, we need a PONG soon, fgt");
 		}
 		free(dup);
 		if (!g_synced) {
-			D("not synced, we wont add this to irc sendQ");
+			N("not synced, we wont add this to irc sendQ");
 			return; //don't queue this ping
 		}
 	} else if (strncmp(line, "PRIVMSG ", 8) == 0) {
@@ -531,7 +531,7 @@ handle_clt_msg(const char *line)
 static void
 handle_fagcmd(const char *line)
 {
-	D("fagcmd: '%s'", line);
+	N("fagcmd: '%s'", line);
 	if (strncmp(line, "DUMPREPQ", 8) == 0) {
 		void *tmpQ = q_init();
 
@@ -833,7 +833,7 @@ process_sendQ(void)
 static void
 on_disconnect(void)
 {
-	D("on disconnect! synced: %d", g_synced);
+	N("on disconnect! synced: %d", g_synced);
 	if (g_synced) {
 		if (g_needpong) {
 			clt_printf(":%1$s PONG %1$s :%1$s\r\n", g_needpong);
@@ -1007,7 +1007,7 @@ init(int *argc, char ***argv)
 	if (listen_sck == -1)
 		EE("couldn't bind to '%s:%hu'", g_listen_if, g_irc_port);
 
-	D("bound socket to '%s:%hu'", g_listen_if, g_irc_port);
+	N("bound socket to '%s:%hu'", g_listen_if, g_irc_port);
 
 	if (listen(listen_sck, 128) != 0)
 		EE("failed to listen()");
@@ -1029,9 +1029,9 @@ init(int *argc, char ***argv)
 static void
 setup_clt(void)
 {
-	D("setting up client");
+	N("setting up client");
 
-	D("accepting a socket");
+	N("accepting a socket");
 	g_clt_sck = accept(g_listen_sck, NULL, NULL);
 
 	if (g_clt_sck == -1)
@@ -1054,14 +1054,14 @@ setup_clt(void)
 		                                            || *end == ' '))
 			*end-- = '\0';
 
-		D("read line: '%s'", buf);
+		N("read line: '%s'", buf);
 
 		if (strncmp(buf, "PASS", 4) == 0) {
 			gotpass = true;
 			if (pass)
 				free(pass);
 			pass = strdup(strtok(buf+4, " "));
-			D("set pass to '%s'", pass);
+			N("set pass to '%s'", pass);
 		} else if (strncmp(buf, "NICK", 4) == 0) {
 			gotnick = true;
 			if (nick)
@@ -1069,23 +1069,23 @@ setup_clt(void)
 			nick = strdup(strtok(buf+4, " "));
 			if (!g_prim_nick)
 				g_prim_nick = strdup(nick);
-			D("set nick to '%s'", nick);
+			N("set nick to '%s'", nick);
 		} else if (strncmp(buf, "USER", 4) == 0) {
 			gotuser = true;
 			if (uname)
 				free(uname);
 			uname = strdup(strtok(buf+4, " "));
-			D("set uname to '%s'", uname);
+			N("set uname to '%s'", uname);
 			conflags = (int)strtol(strtok(NULL, " "), NULL, 10);
-			D("set conflags to %d", conflags);
+			N("set conflags to %d", conflags);
 			strtok(NULL, " ");
 			if (fname)
 				free(fname);
 			fname = strdup(strtok(NULL, " ")+1);
-			D("set fname to '%s'", fname);
+			N("set fname to '%s'", fname);
 		}
 	} while (!gotnick || !gotuser);
-	D("got NICK and USER");
+	N("got NICK and USER");
 
 	strNcpy(g_sync_nick, nick, sizeof g_sync_nick);
 	ircbas_set_nick(g_irc, nick);
@@ -1145,7 +1145,7 @@ main(int argc, char **argv)
 {
 	signal(SIGHUP, sighnd);
 	g_listen_sck = init(&argc, &argv);
-	D("initialized");
+	N("initialized");
 
 	setup_clt();
 
@@ -1164,7 +1164,7 @@ sighnd(int sig)
 	switch(sig)
 	{
 	case SIGHUP:
-		D("caught HUP");
+		N("caught HUP");
 		g_hup = true;
 		break;
 	default:
