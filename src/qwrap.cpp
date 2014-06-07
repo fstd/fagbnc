@@ -8,7 +8,7 @@
 #include <deque>
 
 extern "C" {
-#include <libsrsirc/irc_util.h>
+#include <libsrsirc/util.h>
 #include "intlog.h"
 }
 

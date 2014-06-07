@@ -104,7 +104,7 @@ ilog_init(void)
 	const char *v = getenv("LIBSRSBSNS_DEBUG");
 	const char *sp = v;
 	do { 
-		while (isspace(*sp))
+		while (isspace((unsigned char)*sp))
 			sp++;
 
 		if (!*sp)

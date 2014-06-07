@@ -16,7 +16,7 @@
 extern "C" {
 #include <common.h>
 
-#include <libsrsirc/irc_util.h>
+#include <libsrsirc/util.h>
 #include "intlog.h"
 }
 
@@ -31,7 +31,7 @@ public:
 		                                               s1.length());
 		std::string n2 = std::string(s2, strchr(modepfx, s2[0])?1:0,
 		                                               s2.length());
-		int i = istrcasecmp(n1.c_str(), n2.c_str(), casemap);
+		int i = ut_istrcmp(n1.c_str(), n2.c_str(), casemap);
 		return i < 0;
 	}
 };
@@ -42,7 +42,7 @@ public:
 	static int casemap;
 	bool operator()(std::string const& s1, std::string const& s2) const
 	{
-		int i = istrcasecmp(s1.c_str(), s2.c_str(), casemap);
+		int i = ut_istrcmp(s1.c_str(), s2.c_str(), casemap);
 		return i < 0;
 	}
 };
@@ -321,8 +321,8 @@ ucb_dump()
 extern "C" void
 ucb_init()
 {
-	istringcmp::casemap = CASEMAPPING_RFC1459;
-	usercmp::casemap = CASEMAPPING_RFC1459;
+	istringcmp::casemap = CMAP_RFC1459;
+	usercmp::casemap = CMAP_RFC1459;
 	usercmp::modepfx = strdup("@+");
 	s_primbase = s_base = new basemap_t;
 	s_primsyncmap = s_syncmap = new syncmap_t;

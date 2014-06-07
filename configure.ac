@@ -20,7 +20,7 @@ AC_PROG_MAKE_SET
 
 AC_CHECK_HEADERS([stddef.h sys/time.h])
 AC_CHECK_LIB([srsbsns], [ringbuf_init], [], [AC_MSG_ERROR([libsrsbsns not installed?])])
-AC_CHECK_LIB([srsirc], [ircbas_init], [], [AC_MSG_ERROR([libsrsirc not installed?])])
+AC_CHECK_LIB([srsirc], [irc_init], [], [AC_MSG_ERROR([libsrsirc not installed?])])
 
 # Checks for typedefs, structures, and compiler characteristics.
 AC_CHECK_HEADER_STDBOOL

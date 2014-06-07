@@ -21,10 +21,9 @@
 
 
 #include <common.h>
-#include <libsrsirc/irc_basic.h>
-#include <libsrsirc/irc_con.h>
-#include <libsrsirc/irc_io.h>
-#include <libsrsirc/irc_util.h>
+#include <libsrsirc/irc.h>
+#include <libsrsirc/irc_ext.h>
+#include <libsrsirc/util.h>
 
 #include "intlog.h"
 #include <libsrsbsns/addr.h>
@@ -39,7 +38,6 @@
 #define STRTOI(STR) ((int)strtol((STR), NULL, 10))
 #define DEF_LISTENPORT ((unsigned short)7778)
 #define DEF_LISTENIF "0.0.0.0"
-#define MAX_IRCARGS 16
 #define MAX_NICKLEN 15
 #define MAX_JOIN_AT_ONCE 10
 #define SYNC_DELAY 15
@@ -49,15 +47,15 @@
 
 /* shadowing the irclib calls and g_irc, to keep things
  * readable */
-#define IRESET() ircbas_reset(g_irc)
-#define IDISPOSE() ircbas_dispose(g_irc)
-#define ICONNECT(TOUT) ircbas_connect(g_irc, (TOUT)*1000000ul)
-#define IREAD(TOK,TOKLEN,TO_US) ircbas_read(g_irc,(TOK),(TOKLEN),(TO_US))
-#define IWRITE(LINE) ircbas_write(g_irc, (LINE))
-#define IONLINE() ircbas_online(g_irc)
-#define ICASEMAP() ircbas_casemap(g_irc)
-#define ISTRCASECMP(A,B) istrcasecmp((A),(B),ircbas_casemap(g_irc))
-#define ISTRNCASECMP(A,B,N) istrncasecmp((A),(B),(N),ircbas_casemap(g_irc))
+#define IRESET() irc_reset(g_irc)
+#define IDISPOSE() irc_dispose(g_irc)
+#define ICONNECT() irc_connect(g_irc)
+#define IREAD(TOK,TO_US) irc_read(g_irc,(TOK),(TO_US))
+#define IWRITE(LINE) irc_write(g_irc, (LINE))
+#define IONLINE() irc_online(g_irc)
+#define ICASEMAP() irc_casemap(g_irc)
+#define ISTRCASECMP(A,B) ut_istrcmp((A),(B),irc_casemap(g_irc))
+#define ISTRNCASECMP(A,B,N) ut_istrncmp((A),(B),(N),irc_casemap(g_irc))
 
 typedef void (*sig_t) (int);
 
@@ -67,7 +65,7 @@ static char g_listen_if[256];
 static char g_irc_srv[256];
 static unsigned short g_irc_port = DEF_LISTENPORT;
 
-static ibhnd_t g_irc;
+static irc g_irc;
 
 static int g_listen_sck;
 static int g_clt_sck;
@@ -98,9 +96,9 @@ static void* g_irc_outmissQ;
 
 static void life(void);
 static void process_irc(void);
-static void handle_irc_msg(char **msg, size_t nelem);
+static void handle_irc_msg(tokarr *msg);
 static void handle_irc_353(const char *chan, const char *users);
-static void handle_irc_cmode(const char *chan, const char *const *modes);
+static void handle_irc_cmode(tokarr *tok, const char *ch);
 
 static int clt_read_line(char *dest, size_t destsz);
 static void handle_clt_msg(const char *line);
@@ -120,10 +118,9 @@ static bool is_modepfx_sym(char c);
 static bool is_weaker_modepfx_sym(char c1, char c2);
 static char translate_modepfx(char c);
 
-static void join_irc_msg(char *dest, size_t destsz, const char *const *msg,
-                                                           bool colonTrail);
-static bool dump_irc_msg(char **msg, size_t msg_len, void *tag);
-static bool dump_irc_msg_ex(char **msg, size_t msg_len, void *tag,
+static void join_irc_msg(char *dest, size_t destsz, tokarr *msg, bool colonTrail);
+static bool dump_irc_msg(tokarr *msg, void *tag);
+static bool dump_irc_msg_ex(tokarr *msg, void *tag,
                                                           bool colonTrail);
 
 static void process_args(int *argc, char ***argv);
@@ -158,11 +155,12 @@ life(void)
 
 			if (g_next_con_try <= time(NULL)) {
 				N("time for connect has arrived, connecting");
-				if (ICONNECT(30)) {
+				irc_set_connect_timeout(g_irc, 5000000, 10000000);
+				if (ICONNECT()) {
 					N("connected (fresh: %d)", fresh);
 					if (fresh) {
 						strNcpy(g_sync_nick,
-						       ircbas_mynick(g_irc),
+						       irc_mynick(g_irc),
 						       sizeof g_sync_nick);
 						fresh = false;
 						N("not fresh anymore, saved syncnick as '%s', sending logon conv now", g_sync_nick);
@@ -245,21 +243,21 @@ life(void)
 static void
 process_irc(void)
 {
-	char *tok[MAX_IRCARGS];
-	int r = IREAD(tok, 16, 10000);
-	bool colon = ircbas_colon_trail(g_irc);
+	tokarr tok;
+	int r = IREAD(&tok, 10000);
+	bool colon = irc_colon_trail(g_irc);
 
 
 	if (r == 1) {
-		dump_irc_msg_ex(tok, MAX_IRCARGS, NULL, colon);
+		dump_irc_msg_ex(&tok, NULL, colon);
 
 		if (tok[1][0] >= '0' && tok[1][0] <= '9')
 			g_last_num = time(NULL);
 
-		handle_irc_msg(tok, MAX_IRCARGS);
+		handle_irc_msg(&tok);
 
 		char buf[1024];
-		join_irc_msg(buf, sizeof buf, (const char*const*)tok, colon);
+		join_irc_msg(buf, sizeof buf, &tok, colon);
 
 		if (g_synced) {
 			clt_printf("%s\r\n", buf);
@@ -277,38 +275,37 @@ process_irc(void)
 
 
 static void
-handle_irc_msg(char **msg, size_t nelem)
+handle_irc_msg(tokarr *msg)
 {
 	static bool g_ucbinit = false;
 	char nick[64];
-	pfx_extract_nick(nick, sizeof nick, msg[0]);
-	if (strcmp(msg[1], "005") == 0) {
+	ut_pfx2nick(nick, sizeof nick, (*msg)[0]);
+	if (strcmp((*msg)[1], "005") == 0) {
 		if (!g_ucbinit) {
-			for(size_t i = 3; i < nelem; i++) {
-				if (!msg[i])
+			for(size_t i = 3; i < COUNTOF(*msg); i++) {
+				if (!(*msg)[i])
 					break;
-				if (strstr(msg[i], "CASEMAP"))
+				if (strstr((*msg)[i], "CASEMAP"))
 					ucb_set_casemap(ICASEMAP());
-				if (strstr(msg[i], "PREFIX"))
-					ucb_set_modepfx(
-					       ircbas_005modepfx(g_irc)[1]);
+				if (strstr((*msg)[i], "PREFIX"))
+					ucb_set_modepfx(irc_005modepfx(g_irc, true));
 			}
 			g_ucbinit = true;
 		}
-	} else if (strcmp(msg[1], "JOIN") == 0) {
-		if (ISTRCASECMP(ircbas_mynick(g_irc), nick) == 0) {
-			ucb_add_chan(msg[2]);
-			ucb_set_chan_sync(msg[2], true);
+	} else if (strcmp((*msg)[1], "JOIN") == 0) {
+		if (ISTRCASECMP(irc_mynick(g_irc), nick) == 0) {
+			ucb_add_chan((*msg)[2]);
+			ucb_set_chan_sync((*msg)[2], true);
 		} else {
-			ucb_add_user(msg[2], nick);
+			ucb_add_user((*msg)[2], nick);
 		}
-	} else if (strcmp(msg[1], "PART") == 0) {
-		if (ISTRCASECMP(ircbas_mynick(g_irc), nick) == 0) {
-			ucb_drop_chan(msg[2]);
+	} else if (strcmp((*msg)[1], "PART") == 0) {
+		if (ISTRCASECMP(irc_mynick(g_irc), nick) == 0) {
+			ucb_drop_chan((*msg)[2]);
 		} else {
-			ucb_drop_user(msg[2], nick);
+			ucb_drop_user((*msg)[2], nick);
 		}
-	} else if (strcmp(msg[1], "QUIT") == 0) {
+	} else if (strcmp((*msg)[1], "QUIT") == 0) {
 		ucb_drop_user_all(nick);
 		if (ISTRCASECMP(nick, g_prim_nick) == 0) {
 			N("getting our nick back...");
@@ -317,43 +314,43 @@ handle_irc_msg(char **msg, size_t nelem)
 			q_add(g_irc_sendQ, false, buf);
 			//Q_DUMP(g_irc_sendQ);
 		}
-	} else if (strcmp(msg[1], "NICK") == 0) {
-		if (ISTRCASECMP(ircbas_mynick(g_irc), msg[2]) != 0) {
-			ucb_rename_user(nick, msg[2]);
+	} else if (strcmp((*msg)[1], "NICK") == 0) {
+		if (ISTRCASECMP(irc_mynick(g_irc), (*msg)[2]) != 0) {
+			ucb_rename_user(nick, (*msg)[2]);
 		} else if (g_synced)
-			strNcpy(g_sync_nick, ircbas_mynick(g_irc),
+			strNcpy(g_sync_nick, irc_mynick(g_irc),
 			                                sizeof g_sync_nick);
-	} else if (strcmp(msg[1], "KICK") == 0) {
-		if (ISTRCASECMP(ircbas_mynick(g_irc), msg[3]) == 0) {
-			ucb_drop_chan(msg[2]);
+	} else if (strcmp((*msg)[1], "KICK") == 0) {
+		if (ISTRCASECMP(irc_mynick(g_irc), (*msg)[3]) == 0) {
+			ucb_drop_chan((*msg)[2]);
 		} else {
-			ucb_drop_user(msg[2], msg[3]);
+			ucb_drop_user((*msg)[2], (*msg)[3]);
 		}
-	} else if (strcmp(msg[1], "MODE") == 0) {
-		if (msg[2][0] == '#') //fix when supporting 005 CHANTYPES
-			handle_irc_cmode(msg[2], (const char*const*)msg+3);
-	} else if (strcmp(msg[1], "353") == 0) { //RPL_NAMES
-		if (ucb_is_chan_sync(msg[4])) {
-			ucb_clear_chan(msg[4]);
-			ucb_set_chan_sync(msg[4], false);
+	} else if (strcmp((*msg)[1], "MODE") == 0) {
+		if ((*msg)[2][0] == '#') //fix when supporting 005 CHANTYPES
+			handle_irc_cmode(msg, (*msg)[2]);
+	} else if (strcmp((*msg)[1], "353") == 0) { //RPL_NAMES
+		if (ucb_is_chan_sync((*msg)[4])) {
+			ucb_clear_chan((*msg)[4]);
+			ucb_set_chan_sync((*msg)[4], false);
 		}
-		handle_irc_353(msg[4], msg[5]);
-	} else if (strcmp(msg[1], "366") == 0) { //RPL_ENDOFNAMES
-		ucb_set_chan_sync(msg[3], true);
-	} else if (strcmp(msg[1], "PING") == 0) {
+		handle_irc_353((*msg)[4], (*msg)[5]);
+	} else if (strcmp((*msg)[1], "366") == 0) { //RPL_ENDOFNAMES
+		ucb_set_chan_sync((*msg)[3], true);
+	} else if (strcmp((*msg)[1], "PING") == 0) {
 		if (!g_synced) {
 			N("PING while desynced, queueing PONG");
 			char buf[512];
-			snprintf(buf, sizeof buf, "PONG :%s\r\n", msg[2]);
+			snprintf(buf, sizeof buf, "PONG :%s\r\n", (*msg)[2]);
 			q_add(g_irc_sendQ, false, buf);
 			//Q_DUMP(g_irc_sendQ);
 		}
-	} else if (strcmp(msg[1], "PONG") == 0) {
+	} else if (strcmp((*msg)[1], "PONG") == 0) {
 		free(g_needpong);
 		g_needpong = NULL;
 		g_last_clt_ping = 0;
-	} else if (strcmp(msg[1], "PRIVMSG") == 0
-	                                    && strstr(msg[3], "dump plx")) {
+	} else if (strcmp((*msg)[1], "PRIVMSG") == 0
+	                                    && strstr((*msg)[3], "dump plx")) {
 		ucb_dump();//XXX remove this eventually
 	}
 }
@@ -373,15 +370,11 @@ handle_irc_353(const char *chan, const char *users)
 
 
 static void
-handle_irc_cmode(const char *ch, const char *const *modes)
+handle_irc_cmode(tokarr *tok, const char *ch)
 {
-	size_t modecnt = 0;
-	while(modecnt < (MAX_IRCARGS-3) && modes[modecnt])
-		modecnt++;
 	size_t num;
-	char **p = parse_chanmodes(modes, modecnt, &num,
-	                                        ircbas_005modepfx(g_irc)[0],
-	                                        ircbas_005chanmodes(g_irc));
+	char **p = ut_parse_MODE(g_irc, tok, &num, false);
+
 	for(size_t i = 0; i < num; i++) {
 		bool on = p[i][0] == '+';
 		char mc = p[i][1];
@@ -454,7 +447,7 @@ handle_clt_msg(const char *line)
 
 		char buf[1024];
 		char tmp[128];
-		snprintf(tmp, sizeof tmp, "MODE %s", ircbas_mynick(g_irc));
+		snprintf(tmp, sizeof tmp, "MODE %s", irc_mynick(g_irc));
 		if (ISTRNCASECMP(tmp, line, strlen(tmp)) == 0)
 			snprintf(buf, sizeof buf, "%d $USERMODE$%s",
 			                        secoff, line + strlen(tmp));
@@ -548,7 +541,7 @@ handle_fagcmd(const char *line)
 			q_pop(g_irc_logonQ, true);
 			q_add(tmpQ, false, line);
 
-			clt_printf(":-fagbnc PRIVMSG %s :%d: %s\r\n", ircbas_mynick(g_irc), i, line);
+			clt_printf(":-fagbnc PRIVMSG %s :%d: %s\r\n", irc_mynick(g_irc), i, line);
 			i++;
 		}
 
@@ -559,6 +552,40 @@ handle_fagcmd(const char *line)
 		}
 
 		q_dispose(tmpQ);
+	} else if (strncmp(line, "ADDREPQ ", 8) == 0) {
+		char *dup = strdup(line+8);
+		char *tok = strtok(dup, " ");
+		int elem = STRTOI(tok);
+		tok = strtok(NULL, "\n");
+		bool success = false;
+
+		void *tmpQ = q_init();
+		int i = 0;
+		while(q_size(g_irc_logonQ) > 0) {
+			if (i == elem) {
+				success = true;
+				q_add(tmpQ, false, tok);
+			}
+
+			const char *line = q_peek(g_irc_logonQ, true);
+			q_pop(g_irc_logonQ, true);
+
+			q_add(tmpQ, false, line);
+			i++;
+		}
+
+		if (!success)
+			q_add(tmpQ, false, tok);
+
+		while(q_size(tmpQ) > 0) {
+			const char *line = q_peek(tmpQ, true);
+			q_pop(tmpQ, true);
+			q_add(g_irc_logonQ, false, line);
+		}
+
+		free(dup);
+		
+		clt_printf(":-fagbnc PRIVMSG %s :%s element %d\r\n", irc_mynick(g_irc), success?"added":"NOT added", elem);
 	} else if (strncmp(line, "DROPREPQ ", 9) == 0) {
 		int elem = STRTOI(line+9);
 		bool success = false;
@@ -584,7 +611,7 @@ handle_fagcmd(const char *line)
 			q_add(g_irc_logonQ, false, line);
 		}
 
-		clt_printf(":-fagbnc PRIVMSG %s :%s element %d\r\n", ircbas_mynick(g_irc), success?"dropped":"failed to drop", elem);
+		clt_printf(":-fagbnc PRIVMSG %s :%s element %d\r\n", irc_mynick(g_irc), success?"dropped":"failed to drop", elem);
 	} else if (strncmp(line, "SETVERB ", 8) == 0) {
 		char *dup = strdup(line+8);
 		int verb = STRTOI(strtok(dup, " "));
@@ -618,10 +645,10 @@ clt_printf(const char *fmt, ...)
 static void
 send_logon_conv()
 {
-	const char * const* const* lc = ircbas_logonconv(g_irc);
-	for(int i = 0; i < 4; i++) {
+	tokarr *(*lc)[4] = irc_logonconv(g_irc);
+	for(size_t i = 0; i < COUNTOF(*lc); i++) {
 		char buf[1024];
-		join_irc_msg(buf, sizeof buf, lc[i], true);
+		join_irc_msg(buf, sizeof buf, (*lc)[i], true);
 
 		clt_printf( "%s\r\n", buf);
 	}
@@ -663,7 +690,7 @@ replay_logon(void)
 				if (strncmp(l, "$USERMODE$", 10) == 0) {
 					char li[1024];
 					snprintf(li, sizeof li, "MODE %s%s",
-					               ircbas_mynick(g_irc),
+					               irc_mynick(g_irc),
 					               l+10);
 					snd = li;
 				} else
@@ -695,15 +722,15 @@ replay_logon(void)
 static void
 resync(void)
 {
-	if (strcmp(g_sync_nick, ircbas_mynick(g_irc)) != 0) {
+	if (strcmp(g_sync_nick, irc_mynick(g_irc)) != 0) {
 		ucb_switch_base(true);
-		ucb_rename_user(g_sync_nick, ircbas_mynick(g_irc));
+		ucb_rename_user(g_sync_nick, irc_mynick(g_irc));
 		ucb_switch_base(false);
 
 		clt_printf( ":%s!fix@me NICK %s\r\n", g_sync_nick,
-		                                      ircbas_mynick(g_irc));
+		                                      irc_mynick(g_irc));
 
-		strNcpy(g_sync_nick, ircbas_mynick(g_irc),
+		strNcpy(g_sync_nick, irc_mynick(g_irc),
 		                                        sizeof g_sync_nick);
 	}
 
@@ -716,10 +743,10 @@ resync(void)
 
 		if (added) {
 			clt_printf( ":%s!fix@me JOIN %s\r\n",
-			                         ircbas_mynick(g_irc), tok);
+			                         irc_mynick(g_irc), tok);
 		} else
 			clt_printf( ":%s!fix@me PART %s :syn\r\n",
-			                         ircbas_mynick(g_irc), tok);
+			                         irc_mynick(g_irc), tok);
 		tok = strtok(NULL, ",");
 	}
 
@@ -799,7 +826,7 @@ resync(void)
 	}
 	//Q_DUMP(g_irc_sendQ);
 
-	if (ISTRCASECMP(ircbas_mynick(g_irc), g_prim_nick) != 0) {
+	if (ISTRCASECMP(irc_mynick(g_irc), g_prim_nick) != 0) {
 		char buf[512];
 		snprintf(buf, sizeof buf, "NICK %s\r\n", g_prim_nick);
 		q_add(g_irc_sendQ, false, buf);
@@ -865,22 +892,22 @@ on_disconnect(void)
 static bool
 is_modepfx_chr(char c)
 {
-	return strchr(ircbas_005modepfx(g_irc)[0], c);
+	return strchr(irc_005modepfx(g_irc, false), c);
 }
 
 
 static bool
 is_modepfx_sym(char c)
 {
-	return strchr(ircbas_005modepfx(g_irc)[1], c);
+	return strchr(irc_005modepfx(g_irc, true), c);
 }
 
 
 static bool
 is_weaker_modepfx_sym(char c1, char c2)
 {
-	return strchr(ircbas_005modepfx(g_irc)[1], c1)
-	                          > strchr(ircbas_005modepfx(g_irc)[1], c2);
+	return strchr(irc_005modepfx(g_irc, true), c1)
+	                          > strchr(irc_005modepfx(g_irc, true), c2);
 }
 
 
@@ -888,14 +915,14 @@ static char
 translate_modepfx(char c)
 {
 	if (is_modepfx_chr(c)) {
-		size_t off = (size_t)(strchr(ircbas_005modepfx(g_irc)[0], c)
-		                             - ircbas_005modepfx(g_irc)[0]);
-		return ircbas_005modepfx(g_irc)[1][off];
+		size_t off = (size_t)(strchr(irc_005modepfx(g_irc, false), c)
+		                             - irc_005modepfx(g_irc, false));
+		return irc_005modepfx(g_irc, true)[off];
 	}
 	if (is_modepfx_sym(c)) {
-		size_t off = (size_t)(strchr(ircbas_005modepfx(g_irc)[1], c)
-		                             - ircbas_005modepfx(g_irc)[1]);
-		return ircbas_005modepfx(g_irc)[0][off];
+		size_t off = (size_t)(strchr(irc_005modepfx(g_irc, true), c)
+		                             - irc_005modepfx(g_irc, true));
+		return irc_005modepfx(g_irc, false)[off];
 	}
 	W("unknown modepfx '%c'", c);
 	return 0;
@@ -903,36 +930,35 @@ translate_modepfx(char c)
 
 
 static void
-join_irc_msg(char *dest, size_t destsz, const char *const *msg,
-                                                            bool colonTrail)
+join_irc_msg(char *dest, size_t destsz, tokarr *msg, bool colonTrail)
 {
-	snprintf(dest, destsz, ":%s %s", msg[0], msg[1]);
+	snprintf(dest, destsz, ":%s %s", (*msg)[0], (*msg)[1]);
 
-	int j = 2;
-	while(j < MAX_IRCARGS && msg[j]) {
+	size_t j = 2;
+	while(j < COUNTOF(*msg) && (*msg)[j]) {
 		strNcat(dest, " ", destsz);
-		//if ((j+1 == MAX_IRCARGS || !msg[j+1]) && strchr(msg[j],' '))
-		if (colonTrail && (j+1 == MAX_IRCARGS || !msg[j+1]))
+		//if ((j+1 == COUNTOF(*msg) || !(*msg)[j+1]) && strchr((*msg)[j],' '))
+		if (colonTrail && (j+1 == COUNTOF(*msg) || !(*msg)[j+1]))
 			strNcat(dest, ":", destsz);
-		strNcat(dest, msg[j], destsz);
+		strNcat(dest, (*msg)[j], destsz);
 		j++;
 	}
 }
 
 
 static bool
-dump_irc_msg(char **msg, size_t msg_len, void *tag)
+dump_irc_msg(tokarr *msg, void *tag)
 {
-	return dump_irc_msg_ex(msg, msg_len, tag, true);
+	return dump_irc_msg_ex(msg, tag, true);
 }
 
 
 static bool
-dump_irc_msg_ex(char **msg, size_t msg_len, void *tag, bool colonTrail)
+dump_irc_msg_ex(tokarr *msg, void *tag, bool colonTrail)
 {
 	char msgbuf[1024];
-	join_irc_msg(msgbuf, sizeof msgbuf, (const char*const*)msg, colonTrail);
-	//sndumpmsg(msgbuf, sizeof msgbuf, tag, msg, msg_len);
+	join_irc_msg(msgbuf, sizeof msgbuf, msg, colonTrail);
+	//sndumpmsg(msgbuf, sizeof msgbuf, tag, msg);
 	D("from irc: %s", msgbuf);
 	return true;
 }
@@ -1009,11 +1035,12 @@ init(int *argc, char ***argv)
 
 	char host[256];
 	unsigned short port;
-	parse_hostspec(host, sizeof host, &port, g_irc_srv);
+	bool ssl; //not used right now
+	ut_parse_hostspec(host, sizeof host, &port, &ssl, g_irc_srv);
 
-	g_irc = ircbas_init();
-	ircbas_regcb_conread(g_irc, dump_irc_msg, 0);
-	ircbas_set_server(g_irc, host, port);
+	g_irc = irc_init();
+	irc_regcb_conread(g_irc, dump_irc_msg, 0);
+	irc_set_server(g_irc, host, port);
 
 	int listen_sck = addr_bind_socket_p(g_listen_if, g_irc_port, NULL, NULL, 0, 0);
 	if (listen_sck == -1)
@@ -1150,12 +1177,12 @@ setup_clt(void)
 	N("got NICK and USER");
 
 	strNcpy(g_sync_nick, nick, sizeof g_sync_nick);
-	ircbas_set_nick(g_irc, nick);
+	irc_set_nick(g_irc, nick);
 	if (gotpass)
-		ircbas_set_pass(g_irc, pass);
-	ircbas_set_uname(g_irc, uname);
-	ircbas_set_fname(g_irc, fname);
-	ircbas_set_conflags(g_irc, conflags);
+		irc_set_pass(g_irc, pass);
+	irc_set_uname(g_irc, uname);
+	irc_set_fname(g_irc, fname);
+	irc_set_conflags(g_irc, conflags);
 }
 
 static void
