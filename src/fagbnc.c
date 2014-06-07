@@ -414,7 +414,7 @@ clt_read_line(char *dest, size_t destsz)
 	struct timeval to = {0, 0};
 
 	int r = select(g_clt_sck+1, &fds, NULL, NULL, &to);
-	if (r == -1 && errno == EINTR)
+	if (r == -1 && errno != EINTR)
 		EE("select() failed");
 
 	if (r == 1) {
