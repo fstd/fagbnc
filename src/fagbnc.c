@@ -457,7 +457,7 @@ handle_clt_msg(const char *line)
 		                         || strncmp("NOTICE", line, 6) == 0) 
 			buf[0] = '\0'; //exclude these for now
 		else if (strncmp("PRIVMSG -fagbnc ", line, 15) == 0)
-			;//exclude
+			buf[0] = '\0';//exclude
 		else
 			snprintf(buf, sizeof buf, "%d %s", secoff, line);
 
