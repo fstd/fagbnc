@@ -538,8 +538,8 @@ handle_fagcmd(const char *line)
 		int i = 0;
 		while(q_size(g_irc_logonQ) > 0) {
 			const char *line = q_peek(g_irc_logonQ, true);
-			q_pop(g_irc_logonQ, true);
 			q_add(tmpQ, false, line);
+			q_pop(g_irc_logonQ, true);
 
 			clt_printf(":-fagbnc PRIVMSG %s :%d: %s\r\n", irc_mynick(g_irc), i, line);
 			i++;
@@ -547,8 +547,8 @@ handle_fagcmd(const char *line)
 
 		while(q_size(tmpQ) > 0) {
 			const char *line = q_peek(tmpQ, true);
-			q_pop(tmpQ, true);
 			q_add(g_irc_logonQ, false, line);
+			q_pop(tmpQ, true);
 		}
 
 		q_dispose(tmpQ);
@@ -568,9 +568,9 @@ handle_fagcmd(const char *line)
 			}
 
 			const char *line = q_peek(g_irc_logonQ, true);
-			q_pop(g_irc_logonQ, true);
 
 			q_add(tmpQ, false, line);
+			q_pop(g_irc_logonQ, true);
 			i++;
 		}
 
@@ -579,8 +579,8 @@ handle_fagcmd(const char *line)
 
 		while(q_size(tmpQ) > 0) {
 			const char *line = q_peek(tmpQ, true);
-			q_pop(tmpQ, true);
 			q_add(g_irc_logonQ, false, line);
+			q_pop(tmpQ, true);
 		}
 
 		free(dup);
@@ -594,21 +594,20 @@ handle_fagcmd(const char *line)
 		int i = 0;
 		while(q_size(g_irc_logonQ) > 0) {
 			const char *line = q_peek(g_irc_logonQ, true);
-			q_pop(g_irc_logonQ, true);
-			if (i != elem) {
+			if (i != elem)
 				q_add(tmpQ, false, line);
-			} else {
-				free((char*)line);
+			else
 				success = true;
-			}
+
+			q_pop(g_irc_logonQ, true);
 
 			i++;
 		}
 
 		while(q_size(tmpQ) > 0) {
 			const char *line = q_peek(tmpQ, true);
-			q_pop(tmpQ, true);
 			q_add(g_irc_logonQ, false, line);
+			q_pop(tmpQ, true);
 		}
 
 		clt_printf(":-fagbnc PRIVMSG %s :%s element %d\r\n", irc_mynick(g_irc), success?"dropped":"failed to drop", elem);
