@@ -539,9 +539,9 @@ handle_fagcmd(const char *line)
 		while(q_size(g_irc_logonQ) > 0) {
 			const char *line = q_peek(g_irc_logonQ, true);
 			q_add(tmpQ, false, line);
-			q_pop(g_irc_logonQ, true);
 
 			clt_printf(":-fagbnc PRIVMSG %s :%d: %s\r\n", irc_mynick(g_irc), i, line);
+			q_pop(g_irc_logonQ, true);
 			i++;
 		}
 
