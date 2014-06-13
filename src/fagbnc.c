@@ -95,7 +95,7 @@ static void* g_irc_outmissQ;
 
 
 static void life(void);
-static void process_irc(void);
+static bool process_irc(void);
 static void handle_irc_msg(tokarr *msg);
 static void handle_irc_353(const char *chan, const char *users);
 static void handle_irc_cmode(tokarr *tok, const char *ch);
@@ -140,6 +140,7 @@ life(void)
 {
 	bool fresh = true;
 	g_next_con_try = time(NULL);
+	time_t lastirecv = 0;
 	for(;;) {
 		if (!IONLINE()) {
 			N("not online! (fresh: %d, shutdown: %d, nextcontry: %ld)",
@@ -184,7 +185,8 @@ life(void)
 
 		if (IONLINE()) {
 
-			process_irc();
+			if (process_irc())
+				lastirecv = time(NULL);
 
 			if (g_grab_logon && g_last_num + LGRAB_TIME < time(NULL)) {
 				N("first sync complete, disabling g_grab_logon which was %d", g_grab_logon);
@@ -200,8 +202,8 @@ life(void)
 							":synced\r\n", g_sync_nick);
 			}
 
-			if (g_synced && g_max_lag && g_last_clt_ping &&
-					  time(NULL)-g_last_clt_ping > g_max_lag) {
+			if (g_synced && g_max_lag && time(NULL)-lastirecv > g_max_lag &&
+			    g_last_clt_ping && time(NULL)-g_last_clt_ping > g_max_lag) {
 				W("too laggy (%d sec), assuming d/c, resetting irc backend", g_max_lag);
 				IRESET();
 				continue;
@@ -240,7 +242,7 @@ life(void)
 }
 
 
-static void
+static bool
 process_irc(void)
 {
 	tokarr tok;
@@ -269,8 +271,12 @@ process_irc(void)
 				//Q_DUMP(g_irc_missQ);
 			}
 		}
+
+		return true;
 	} else if (r == -1)
 		W("IREAD failed");
+
+	return false;
 }
 
 
