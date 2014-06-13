@@ -285,7 +285,10 @@ handle_irc_msg(tokarr *msg)
 {
 	static bool g_ucbinit = false;
 	char nick[64];
-	ut_pfx2nick(nick, sizeof nick, (*msg)[0]);
+	if ((*msg)[0])
+		ut_pfx2nick(nick, sizeof nick, (*msg)[0]);
+	else
+		nick[0] = '\0';
 	if (strcmp((*msg)[1], "005") == 0) {
 		if (!g_ucbinit) {
 			for(size_t i = 3; i < COUNTOF(*msg); i++) {
