@@ -657,6 +657,8 @@ send_logon_conv(void)
 	tokarr *(*lc)[4] = irc_logonconv(g_irc);
 	for(size_t i = 0; i < COUNTOF(*lc); i++) {
 		char buf[1024];
+		if (!(*lc)[i])
+			continue;
 		join_irc_msg(buf, sizeof buf, (*lc)[i], true);
 
 		clt_printf( "%s\r\n", buf);
