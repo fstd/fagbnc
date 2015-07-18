@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 
-size_t ucb_count_chans();
+size_t ucb_count_chans(void);
 const char *ucb_next_chan(bool first);
 
 size_t ucb_count_users(const char *chan);
@@ -32,20 +32,20 @@ bool ucb_get_user(char *dst, size_t dstsz, const char *ch, const char *us);
 void ucb_reprefix_user(const char *chan, const char *name, char c);
 void ucb_rename_user(const char *oldname, const char *newname);
 
-char* ucb_diff_chans();
+char* ucb_diff_chans(void);
 char* ucb_diff_users(const char *chan);
-void ucb_cleanup();
-void ucb_purge();
+void ucb_cleanup(void);
+void ucb_purge(void);
 
-void ucb_init();
+void ucb_init(void);
 void ucb_set_modepfx(const char *modepfx);
 void ucb_set_casemap(int casemap);
 void ucb_switch_base(bool primary);
-void ucb_copy();
+void ucb_copy(void);
 void ucb_store_key(const char *chan, const char *key);
 const char* ucb_retrieve_key(const char *chan);
 
-void ucb_dump();
+void ucb_dump(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

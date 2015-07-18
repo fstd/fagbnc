@@ -9,7 +9,7 @@ extern "C" {
 #include <stddef.h>
 #endif
 
-void *q_init();
+void *q_init(void);
 void q_add(void *q, bool head, const char *data);
 const char *q_peek(void *q, bool head);
 const char *q_pop(void *q, bool head);

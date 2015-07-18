@@ -106,7 +106,7 @@ static void handle_clt_msg(const char *line);
 static void handle_fagcmd(const char *line);
 
 static int clt_printf(const char *fmt, ...);
-static void send_logon_conv();
+static void send_logon_conv(void);
 static void replay_logon(void);
 static void resync(void);
 
@@ -652,7 +652,7 @@ clt_printf(const char *fmt, ...)
 
 
 static void
-send_logon_conv()
+send_logon_conv(void)
 {
 	tokarr *(*lc)[4] = irc_logonconv(g_irc);
 	for(size_t i = 0; i < COUNTOF(*lc); i++) {
@@ -1145,7 +1145,7 @@ setup_clt(void)
 	bool gotuser = false;
 	bool gotpass = false;
 	char *uname = NULL, *fname = NULL, *nick = NULL, *pass = NULL;
-	int conflags;
+	int conflags = 0;
 	do {
 		r = io_read_line(g_clt_sck, buf, sizeof buf);	
 		if (r == -1)
