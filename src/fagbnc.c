@@ -85,6 +85,7 @@ static volatile bool g_hup;
 static int g_max_lag;
 static char *g_prim_nick;
 static int g_hup_wait_time;
+static int g_rto = 10000;
 
 static void* g_irc_sendQ;
 static void* g_irc_logonQ;
@@ -246,7 +247,7 @@ static bool
 process_irc(void)
 {
 	tokarr tok;
-	int r = IREAD(&tok, 10000);
+	int r = IREAD(&tok, g_rto);
 	bool colon = irc_colon_trail(g_irc);
 
 
@@ -977,7 +978,7 @@ process_args(int *argc, char ***argv)
 {
 	char *a0 = (*argv)[0];
 
-	for(int ch; (ch = getopt(*argc, *argv, "vqchi:p:s:kl:w:n")) != -1;) {
+	for(int ch; (ch = getopt(*argc, *argv, "vqchi:p:s:kl:w:nR:")) != -1;) {
 		switch (ch) {
 		case 'i':
 			strNcpy(g_listen_if, optarg, sizeof g_listen_if);
@@ -1002,6 +1003,9 @@ process_args(int *argc, char ***argv)
 			break;
 		case 'c':
 			ilog_setfancy(true);
+			break;
+		case 'R':
+			g_rto = STRTOI(optarg);
 			break;
 		case 'q':
 			g_verb--;
